@@ -145,6 +145,15 @@ Plaintext on disk on iOS, both in a protected scratch directory (class Complete,
 | Share… / export | decrypted copy handed to the share sheet; the receiving app keeps its own copy |
 | Import from Photos | the picked photo/video is staged, encrypted, verified, then deleted |
 
+Notes and dictation (iOS):
+
+| Thing | Where it lives |
+|---|---|
+| Note text | encrypted vault file; in memory while the vault is unlocked (search index included); dropped on lock |
+| Unsaved edits | memory; written to the vault before the keys are dropped at lock |
+| Dictated audio | microphone → Apple's on-device recognizer, in memory. `requiresOnDeviceRecognition` is always set; no fallback to a server. Not recorded |
+| What iOS may keep | the system keyboard learns from note text typed with autocorrect on (as in any app); Reset Keyboard Dictionary clears it |
+
 Not covered on iOS: a jailbroken device or a malicious build while a vault is unlocked; screenshots you take yourself; iOS keeps the full local replica (no selective sync), so a large vault uses the same space on the phone.
 
 ## Where plaintext leaves the boundary

@@ -14,7 +14,7 @@ End-to-end-encrypted file vaults. macOS app, iOS app, CLI, optional zero-knowled
 | CLI | `crates/cli` | `coffer` |
 | C ABI for the app | `crates/ffi` | `libcoffer_ffi.a` |
 | macOS app (SwiftUI) | `app/` | `dist/Coffer.app` |
-| iOS app (SwiftUI) | `ios/` | Xcode project, see [ios/README.md](ios/README.md) |
+| iOS app (SwiftUI): files + notes with on-device dictation | `ios/` | Xcode project, see [ios/README.md](ios/README.md) |
 | Deploy (Docker, systemd, GCE) | `deploy/` | see `deploy/README.md` |
 
 Docs: [docs/SECURITY.md](docs/SECURITY.md) (threat model, crypto, limits) · [docs/SYNC.md](docs/SYNC.md) (conflict rules).
