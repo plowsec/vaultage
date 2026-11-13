@@ -1,0 +1,6 @@
+target
+**/target
+.git
+deploy/.env
+deploy/secrets
+data

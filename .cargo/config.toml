@@ -1,0 +1,4 @@
+# Same deployment target for Rust and C objects (blake3, ring) as the Swift app.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "14.0"
+IPHONEOS_DEPLOYMENT_TARGET = "17.0"

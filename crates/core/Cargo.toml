@@ -1,0 +1,24 @@
+[package]
+name = "coffer-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+blake3.workspace = true
+chacha20poly1305.workspace = true
+argon2.workspace = true
+zeroize.workspace = true
+getrandom.workspace = true
+ed25519-dalek.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+libc.workspace = true
+ureq.workspace = true
+tempfile = { workspace = true, optional = true }
+
+[features]
+# Exposes `testkit` (in-memory server, fault injection, fuzzer) to other crates' tests.
+testing = ["dep:tempfile"]
+
+[dev-dependencies]
+tempfile.workspace = true

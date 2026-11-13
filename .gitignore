@@ -1,0 +1,7 @@
+/target
+/dist
+/app/.build
+.DS_Store
+deploy/.env
+deploy/secrets/
+/ios/build

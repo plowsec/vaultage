@@ -1,0 +1,23 @@
+[package]
+name = "coffer-server"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "cofferd"
+path = "src/main.rs"
+
+[dependencies]
+coffer-core = { path = "../core" }
+axum.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+blake3.workspace = true
+ureq = { workspace = true }
+
+[dev-dependencies]
+coffer-core = { path = "../core", features = ["testing"] }
+tempfile.workspace = true
+ureq = { workspace = true }
+ed25519-dalek = { workspace = true }

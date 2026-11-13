@@ -1,0 +1,12 @@
+[package]
+name = "coffer-ffi"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+coffer-core = { path = "../core" }
+serde_json.workspace = true
+zeroize.workspace = true

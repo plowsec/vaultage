@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/server", "crates/cli", "crates/ffi"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+blake3 = "1.8"
+chacha20poly1305 = "0.11"
+argon2 = { version = "0.6", default-features = false, features = ["alloc"] }
+zeroize = "1.9"
+getrandom = "0.4"
+ed25519-dalek = { version = "3", default-features = false, features = ["zeroize"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+ureq = { version = "=3.5.1", default-features = false, features = ["rustls"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "signal", "macros", "sync", "time"] }
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+panic = "abort"
+strip = true
+
+# Optimise dependencies (Argon2, ChaCha, BLAKE3) even in debug builds.
+[profile.dev.package."*"]
+opt-level = 3

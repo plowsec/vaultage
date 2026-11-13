@@ -1,0 +1,52 @@
+# /etc/systemd/system/cofferd.service
+# Token: /etc/coffer/enroll_token (root:root 0600), passed as a systemd credential.
+[Unit]
+Description=Coffer vault server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/local/bin/cofferd --data /var/lib/coffer --listen 127.0.0.1:8787 --enroll-token-file %d/enroll_token
+LoadCredential=enroll_token:/etc/coffer/enroll_token
+Restart=on-failure
+RestartSec=2
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+DynamicUser=yes
+StateDirectory=coffer
+StateDirectoryMode=0700
+UMask=0077
+LimitNOFILE=65536
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateUsers=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target
