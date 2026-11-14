@@ -12,6 +12,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DIR="${APP_DIR:-/Applications}"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
 BUNDLE_ID=local.coffer.app
+# Same value as build-app.sh and .cargo/config.toml, or cargo rebuilds C deps on every run.
+export MACOSX_DEPLOYMENT_TARGET=14.0
 CLI=1
 OPEN=0
 for arg in "$@"; do
@@ -74,6 +76,9 @@ echo "    app  $DEST"
 if [ "$CLI" = 1 ]; then
   mkdir -p "$BIN_DIR"
   install -m 755 "$ROOT/target/release/coffer" "$BIN_DIR/coffer"
+  # Hardened runtime, like the app: blocks DYLD_INSERT_LIBRARIES injection.
+  codesign --force --options runtime --timestamp=none --identifier local.coffer.cli \
+    --sign "${CODESIGN_IDENTITY:--}" "$BIN_DIR/coffer"
   echo "    cli  $BIN_DIR/coffer"
   case ":$PATH:" in
     *":$BIN_DIR:"*) ;;

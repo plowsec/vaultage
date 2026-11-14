@@ -19,6 +19,24 @@ End-to-end-encrypted file vaults. macOS app, iOS app, CLI, optional zero-knowled
 
 Docs: [docs/SECURITY.md](docs/SECURITY.md) (threat model, crypto, limits) · [docs/SYNC.md](docs/SYNC.md) (conflict rules).
 
+## Install (macOS)
+
+```sh
+scripts/install.sh            # build, then /Applications/Coffer.app + ~/.local/bin/coffer; re-run to update
+scripts/install.sh --open     # same, then launch the app
+```
+
+| Knob | Default | Use |
+|---|---|---|
+| `APP_DIR` | `/Applications` | where the app goes |
+| `BIN_DIR` | `~/.local/bin` | where the CLI goes |
+| `CODESIGN_IDENTITY` | ad-hoc | signing identity for app and CLI |
+| `--no-cli` | | app only |
+
+- Quit Coffer before updating; the script refuses while it runs.
+- A replaced app is moved to a temp folder, not deleted. Vault data (`~/Library/Application Support/Coffer`) is not touched.
+- Uninstall: drag `Coffer.app` to the Trash, remove `~/.local/bin/coffer`. Vaults stay until you delete that data folder.
+
 ## Build
 
 ```sh
