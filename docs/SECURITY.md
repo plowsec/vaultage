@@ -151,7 +151,8 @@ Notes and dictation (iOS):
 |---|---|
 | Note text | encrypted vault file; in memory while the vault is unlocked (search index included); dropped on lock |
 | Unsaved edits | memory; written to the vault before the keys are dropped at lock |
-| Dictated audio | microphone → Apple's on-device recognizer, in memory. `requiresOnDeviceRecognition` is always set; no fallback to a server. Not recorded |
+| Dictated audio | microphone → an on-device engine, in memory. Not recorded. iOS 26+ with the enhanced model: `SpeechAnalyzer` (local by design). Otherwise `SFSpeechRecognizer` with `requiresOnDeviceRecognition` always set. No fallback to a server |
+| Enhanced speech model | system asset. Downloaded from Apple only when you tap Download in Settings › Voice Notes (Apple sees a model request for the language, no audio or text) |
 | What iOS may keep | the system keyboard learns from note text typed with autocorrect on (as in any app); Reset Keyboard Dictionary clears it |
 
 Not covered on iOS: a jailbroken device or a malicious build while a vault is unlocked; screenshots you take yourself; iOS keeps the full local replica (no selective sync), so a large vault uses the same space on the phone.
