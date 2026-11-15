@@ -168,7 +168,9 @@ pub fn claim(list: &mut Vec<InviteRec>, id: &str, nonce: &str, now: i64) -> R<In
         if !r.blob.is_empty() && r.claim_nonce == tag {
             return Ok(InviteOut::Blob(r.blob.clone()));
         }
-        return Ok(InviteOut::Gone("invite already used".into()));
+        // Past the window. Its first claimer is told so: nobody else took it.
+        let who = if r.claim_nonce == tag { " by this device; ask for a new one" } else { "" };
+        return Ok(InviteOut::Gone(format!("invite already used{who}")));
     }
     if r.expires_ms <= now {
         return Ok(InviteOut::Gone("invite expired".into()));
@@ -209,7 +211,8 @@ mod tests {
         assert!(matches!(claim(&mut l, &a.id, &n2, now + 2), Ok(InviteOut::Gone(_))));
         assert!(!stale(&l, now + 2) && stale(&l, now + 1 + INVITE_RETRY_MS));
         // After the window the payload is gone, even for the first claimer.
-        assert!(matches!(claim(&mut l, &a.id, &n1, now + 1 + INVITE_RETRY_MS), Ok(InviteOut::Gone(_))));
+        assert!(matches!(claim(&mut l, &a.id, &n1, now + 1 + INVITE_RETRY_MS), Ok(InviteOut::Gone(m)) if m.contains("used by this device")));
+        assert!(matches!(claim(&mut l, &a.id, &n2, now + 1 + INVITE_RETRY_MS), Ok(InviteOut::Gone(m)) if m == "invite already used"));
         assert!(l[0].blob.is_empty() && !stale(&l, now + 1 + INVITE_RETRY_MS));
         // The id stays taken.
         assert!(matches!(create(&mut l, &a, now + 2), Err(SErr::Exists)));

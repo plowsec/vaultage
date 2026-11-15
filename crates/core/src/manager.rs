@@ -20,6 +20,14 @@ use crate::store::atomic_write;
 use crate::sync::{sync_once, SyncReport};
 use crate::vault::{Keys, Vault};
 
+/// An invite claim this device started (`claims.json`, by invite id).
+#[derive(Serialize, Deserialize)]
+struct PendingClaim {
+    nonce: String,
+    /// When the first attempt started, unix ms.
+    at: i64,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct VaultRef {
     pub id: String,
@@ -499,8 +507,9 @@ impl Manager {
         let http = ov.http().ok_or_else(|| Error::Invalid("this vault is not synced".into()))?;
         let vmk = ov.v().keys().vmk.clone();
         let now = now_ms();
-        let mut out: Vec<_> = http
-            .list_invites()?
+        let list = http.list_invites()?;
+        crate::invite::check_list(&list)?;
+        let mut out: Vec<_> = list
             .into_iter()
             .map(|i| {
                 let label = crate::hexutil::decode(&i.info).and_then(|b| crate::invite::open_info(&vmk, id, &i.id, &b)).unwrap_or_default();
@@ -537,13 +546,29 @@ impl Manager {
         }
         let secret = crypto::recovery_decode(&line.secret).map_err(|_| Error::Invalid("not a valid invite: bad key".into()))?;
         let ik = crate::invite::InviteKeys::from_secret(&secret);
-        let blob = match http::claim_invite(&url, &line.vault, &ik) {
+        // A claim uses the invite up, so everything that can fail without the payload goes first,
+        // and the nonce is saved: a join that fails after the claim can be tried again.
+        let nonce = self.claim_nonce(&ik.id)?;
+        let path = self.home.join("vaults").join(&line.vault);
+        if path.exists() && fs::read_dir(&path)?.next().is_some() {
+            return Err(Error::Exists(path.display().to_string()));
+        }
+        let unknown = || Error::NotFound("this invite doesn't exist on the server: it was never created there, or the vault's keys were rotated".into());
+        let header = match http::fetch_header(&url, &line.vault) {
+            Ok(h) => h,
+            Err(Error::NotFound(_)) => return Err(unknown()),
+            Err(e) => return Err(e),
+        };
+        if header.vault_id != line.vault {
+            return Err(Error::Integrity("server returned a different vault".into()));
+        }
+        let blob = match http::claim_invite(&url, &line.vault, &ik, &nonce) {
             Ok(b) => b,
             Err(Error::NotFound(_)) => {
                 // Not a one-time invite: maybe an old-style one (key slot in the header).
                 return match self.join(name, &url, &line.vault, SlotKind::Recovery, line.secret.as_bytes()) {
                     Ok(id) => Ok((id, None)),
-                    Err(Error::Crypto(_)) | Err(Error::NotFound(_)) => Err(Error::NotFound("this invite doesn't exist on the server: it was never created there, or the vault's keys were rotated".into())),
+                    Err(Error::Crypto(_)) | Err(Error::NotFound(_)) => Err(unknown()),
                     Err(e) => Err(e),
                 };
             }
@@ -551,12 +576,7 @@ impl Manager {
             Err(e) => return Err(e),
         };
         let (vmk, label) = ik.open_payload(&line.vault, &blob)?;
-        let header = http::fetch_header(&url, &line.vault)?;
-        if header.vault_id != line.vault {
-            return Err(Error::Integrity("server returned a different vault".into()));
-        }
         header.verify(&vmk).map_err(|_| Error::Invalid("the vault's keys were rotated after this invite was made; ask for a new invite".into()))?;
-        let path = self.home.join("vaults").join(&line.vault);
         Vault::init(&path, &header, Some(url.clone()))?;
         let mut vault = Vault::open(&path, vmk, &self.device())?;
         // Our own way back in. Pushed to the server by the first sync (header version goes up).
@@ -567,7 +587,37 @@ impl Manager {
         self.register(r.clone())?;
         let ov = self.install(&r, vault)?;
         ov.wake();
+        self.edit_claims(|c| c.remove(&ik.id).is_some()).ok();
         Ok((line.vault, Some(crypto::recovery_encode(&recovery))))
+    }
+
+    /// The nonce this device claims invite `invite_id` with: the one an earlier attempt used, while
+    /// the server's retry window can still be open, else a new one. Kept in `claims.json`.
+    fn claim_nonce(&self, invite_id: &str) -> Result<String> {
+        let mut nonce = String::new();
+        self.edit_claims(|c| {
+            let fresh = !c.contains_key(invite_id);
+            let e = c.entry(invite_id.to_string()).or_insert_with(|| PendingClaim { nonce: crate::hexutil::encode(&crypto::random::<16>()), at: now_ms() });
+            nonce = e.nonce.clone();
+            fresh
+        })?;
+        Ok(nonce)
+    }
+
+    /// Read-modify-write `claims.json`; `f` returns whether it changed anything. Entries past the
+    /// retry window are dropped (their nonce no longer gets the payload).
+    fn edit_claims(&self, f: impl FnOnce(&mut BTreeMap<String, PendingClaim>) -> bool) -> Result<()> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let path = self.home.join("claims.json");
+        let mut claims: BTreeMap<String, PendingClaim> = fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        let (before, now) = (claims.len(), now_ms());
+        claims.retain(|_, c| (0..crate::proto::INVITE_RETRY_MS).contains(&(now - c.at)));
+        let changed = f(&mut claims);
+        if changed || claims.len() != before {
+            atomic_write(&path, &serde_json::to_vec_pretty(&claims)?)?;
+        }
+        Ok(())
     }
 
     /// Turn a local vault into a synced one: uploads its whole kept history to a server that does

@@ -226,12 +226,13 @@ pub fn fetch_header(url: &str, vault_id_hex: &str) -> Result<Header> {
 }
 
 /// Claim a one-time invite: returns its sealed payload. Signed with the invite's claim key.
-/// Network failures are retried with the same nonce, so a lost reply doesn't burn the invite.
-pub fn claim_invite(url: &str, vault_id_hex: &str, keys: &crate::invite::InviteKeys) -> Result<Vec<u8>> {
+/// `nonce` (16 bytes hex) names this claimer: the server hands the payload to the same nonce again
+/// for `INVITE_RETRY_MS`, so a lost reply or a join that failed later doesn't burn the invite.
+pub fn claim_invite(url: &str, vault_id_hex: &str, keys: &crate::invite::InviteKeys, nonce: &str) -> Result<Vec<u8>> {
     let base = check_url(url)?;
     let agent = agent(&base);
     let path = format!("/v1/vaults/{vault_id_hex}/invites/{}/claim", keys.id);
-    let body = serde_json::to_vec(&InviteClaimReq { nonce: hexutil::encode(&crate::crypto::random::<16>()) })?;
+    let body = serde_json::to_vec(&InviteClaimReq { nonce: nonce.to_string() })?;
     let mut attempt = 0;
     loop {
         let auth = sign_request(&keys.claim, "POST", &path, now_ms(), &body);

@@ -177,7 +177,8 @@ pub struct InviteCreateReq {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct InviteClaimReq {
-    /// 16 random bytes hex, fresh per join attempt; lets a retry after a lost reply succeed.
+    /// 16 random bytes hex, kept by the claimer for the retry window: the same device may claim
+    /// again after a lost reply or a join that failed later.
     pub nonce: String,
 }
 

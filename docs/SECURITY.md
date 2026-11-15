@@ -71,7 +71,7 @@ coffer Work adopt                   # on every device that stays, with the NEW s
 | Leaked line after use | opens nothing: the secret is in no key slot, the server refuses the payload |
 | Payload erased from the server | on revoke; else by the next claim of that invite or the next request from any member, once it is used (+10 min) or expired |
 | Leaked line before use | the thief joins; your recipient then gets "already used" → rotate keys |
-| Lost reply during the claim | the same join attempt (same nonce) may fetch it again for 10 min; nobody else |
+| Lost reply, or a join that fails after the claim | this device keeps its claim nonce (`claims.json`) and may fetch the payload again for 10 min; nobody else. Local checks and the header fetch run before the claim |
 | Junk claims | bad signatures and unknown ids are rate-limited per vault; a valid claim is never refused for them |
 | Expiry | 24 h default, 7 days max; revocable while unused (`coffer Work invites revoke <id>`, Vault Settings → Sharing) |
 | Rotation | drops every open invite |

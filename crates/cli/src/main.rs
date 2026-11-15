@@ -157,6 +157,12 @@ fn rel(t: i64, now: i64) -> String {
     if t > now { format!("in {s}") } else { format!("{s} ago") }
 }
 
+/// Text another member wrote (an invite label), safe to print: no control characters, so no
+/// terminal escape sequences.
+fn printable(s: &str) -> String {
+    s.chars().map(|c| if c.is_control() { '\u{fffd}' } else { c }).collect()
+}
+
 /// QR code for a terminal: two rows per line (half blocks), explicit black on white so it scans
 /// on dark and light themes alike.
 fn qr_text(text: &str) -> String {
@@ -476,7 +482,8 @@ fn run() -> Result<()> {
                     "revoked" => format!("revoked {}", rel(i.revoked.unwrap_or(0), now)),
                     _ => format!("expired {}", rel(i.expires, now)),
                 };
-                println!("{}  {:<8} {:<18} {}", &i.id[..8], i.state, when, i.label);
+                // Ids are checked by the core (32 hex characters): the slice cannot fail.
+                println!("{}  {:<8} {:<18} {}", &i.id[..8], i.state, when, printable(&i.label));
             }
         }
         "rotate" => {

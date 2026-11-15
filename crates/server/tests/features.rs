@@ -366,3 +366,44 @@ fn invite_payload_is_erased_and_junk_claims_block_nobody() {
     assert!(fid == id && key.is_some());
     gone(snoop.join_invite("X", &real), "used");
 }
+
+#[test]
+fn a_join_that_fails_does_not_burn_the_invite() {
+    use coffer_core::invite::{parse_line, InviteKeys};
+    let tmp = tempfile::tempdir().unwrap();
+    let (_h, url) = server(&tmp.path().join("server"));
+    let a = Manager::new(tmp.path().join("homeA"), false).unwrap();
+    let home = tmp.path().join("homeFriend");
+    let friend = Manager::new(home.clone(), false).unwrap();
+    let snoop = Manager::new(tmp.path().join("homeSnoop"), false).unwrap();
+    let (id, _) = a.create("Shared", Some((&url, TOKEN))).unwrap();
+    put(&a, &id, "plan.txt", b"shared plan");
+    sync(&a, &id);
+    let state = || a.invites(&id).unwrap()[0].state.clone();
+    let line = a.invite(&id, "Sam", None).unwrap();
+
+    // A leftover folder is in the way: the join stops before the claim, the invite stays open.
+    let (dir, junk) = (home.join("vaults").join(&id), home.join("vaults").join(&id).join("leftover"));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(&junk, b"x").unwrap();
+    assert!(matches!(friend.join_invite("Shared", &line), Err(Error::Exists(_))));
+    assert_eq!(state(), "waiting");
+
+    // The claim lands but the join does not finish (crash, full disk): simulated by claiming with
+    // the nonce the failed attempt saved. The same device can still join; nobody else can.
+    let claims: Value = serde_json::from_slice(&fs::read(home.join("claims.json")).unwrap()).unwrap();
+    let ik = InviteKeys::from_secret(&coffer_core::crypto::recovery_decode(&parse_line(&line).unwrap().secret).unwrap());
+    let nonce = claims[&ik.id]["nonce"].as_str().unwrap().to_string();
+    coffer_core::http::claim_invite(&url, &id, &ik, &nonce).unwrap();
+    assert_eq!(state(), "used");
+    gone(snoop.join_invite("X", &line), "used");
+    fs::remove_file(&junk).unwrap();
+    fs::remove_dir(&dir).unwrap();
+    let (fid, key) = friend.join_invite("Shared", &line).unwrap();
+    assert!(fid == id && key.is_some());
+    sync(&friend, &id);
+    assert_eq!(read(&friend, &id, "plan.txt"), b"shared plan");
+    // Joined: the saved nonce is gone.
+    let claims: Value = serde_json::from_slice(&fs::read(home.join("claims.json")).unwrap()).unwrap();
+    assert!(claims.as_object().unwrap().is_empty());
+}

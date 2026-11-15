@@ -95,6 +95,18 @@ pub fn parse_line(code: &str) -> Result<InviteLine> {
     Ok(InviteLine { url: url.trim().to_string(), vault, secret: secret.trim().to_string() })
 }
 
+/// The server's invite list is untrusted: ids must be 32 lowercase hex characters and distinct
+/// (they are shown, cut to a prefix and sent back in a revoke path).
+pub fn check_list(list: &[crate::proto::InviteInfo]) -> Result<()> {
+    let mut seen = std::collections::HashSet::new();
+    let ok = |id: &str| id.len() == 32 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    if list.iter().all(|i| ok(&i.id) && seen.insert(i.id.as_str())) {
+        Ok(())
+    } else {
+        Err(Error::Format("invite list from the server".into()))
+    }
+}
+
 /// One invite as members see it.
 #[derive(Serialize, Clone, Debug)]
 pub struct InviteStatus {
@@ -132,6 +144,18 @@ mod tests {
         let info = seal_info(&vmk, vault, &k.id, "Sam");
         assert_eq!(open_info(&vmk, vault, &k.id, &info).as_deref(), Some("Sam"));
         assert!(open_info(&vmk, vault, &other.id, &info).is_none());
+    }
+
+    #[test]
+    fn server_list_ids_are_checked() {
+        let info = |id: &str| crate::proto::InviteInfo { id: id.into(), info: String::new(), created_ms: 0, expires_ms: 0, claimed_ms: None, revoked_ms: None };
+        let (a, b) = ("0123456789abcdef".repeat(2), "f".repeat(32));
+        assert!(check_list(&[info(&a), info(&b)]).is_ok());
+        assert!(check_list(&[]).is_ok());
+        for bad in ["", "abc", &a.to_uppercase(), &format!("{}\u{1b}[2J", &a[..26]), &format!("{}é", &a[..30]), &"g".repeat(32)] {
+            assert!(check_list(&[info(bad)]).is_err(), "{bad:?}");
+        }
+        assert!(check_list(&[info(&a), info(&a)]).is_err());
     }
 
     #[test]
