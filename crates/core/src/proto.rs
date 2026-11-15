@@ -30,9 +30,11 @@
 //! Idempotent. Pruned records come back from `log` with an empty `blob`.
 //!
 //! Invites: one-time. A claim returns the sealed payload once and marks the invite used; the same
-//! `nonce` may claim again for `INVITE_RETRY_MS` (lost reply), after which the payload is
-//! deleted. Used/expired/revoked invites stay as tombstones (no payload) so an id is never reused.
-//! Rekey drops every invite.
+//! `nonce` may claim again for `INVITE_RETRY_MS` (lost reply). A payload past that window, expired
+//! or revoked is never handed out; it is erased from storage by the next claim of that invite or
+//! the next signed request from a member. Used/expired/revoked invites stay as tombstones (no
+//! payload) so an id is never reused. Rekey drops every invite. Failed claims (bad signature,
+//! unknown id) are rate-limited per vault; a correctly signed claim is not.
 //!
 //! Rekey: atomically replaces the vault's `auth_pub` and header (header.version must increase).
 //! From then on only the new key signs.

@@ -68,9 +68,11 @@ coffer Work adopt                   # on every device that stays, with the NEW s
 | Property | How |
 |---|---|
 | Works once | the server holds the invite and hands its payload out once; later claims get 410 "already used" |
-| Leaked line after use | opens nothing: the secret is in no key slot, the server deleted the payload |
+| Leaked line after use | opens nothing: the secret is in no key slot, the server refuses the payload |
+| Payload erased from the server | on revoke; else by the next claim of that invite or the next request from any member, once it is used (+10 min) or expired |
 | Leaked line before use | the thief joins; your recipient then gets "already used" → rotate keys |
 | Lost reply during the claim | the same join attempt (same nonce) may fetch it again for 10 min; nobody else |
+| Junk claims | bad signatures and unknown ids are rate-limited per vault; a valid claim is never refused for them |
 | Expiry | 24 h default, 7 days max; revocable while unused (`coffer Work invites revoke <id>`, Vault Settings → Sharing) |
 | Rotation | drops every open invite |
 | Server's view | invite id, claim public key, sealed payload, sealed label, times. Never the secret, the vault key or the label |
@@ -79,6 +81,7 @@ coffer Work adopt                   # on every device that stays, with the NEW s
 Derivation (BLAKE3 from the 32-byte secret): invite id, Ed25519 claim key (signs the claim), wrap key (seals vault key + label, bound to vault and invite id).
 
 - Not protected: a server operator who keeps the payload and later reads the line. Treat the server like the chat: it alone can't open anything; both together can.
+- Same for old copies of the server's data: backups, snapshots and bucket soft-delete can hold a payload after it is erased. Such a copy plus the line opens the vault as it was before the next rotation.
 - QR code (Mac invite sheet, iPhone invite sheet, `--qr`): scan it in Vaultage (Join → Scan QR Code). The iPhone Camera app would open the `https://` line in Safari and keep it in history.
 - Old-style invites (a recovery slot labelled "Invite…", created before this change) still join and keep working until removed under Unlock Methods.
 - Per-file links and read-only members do not exist. Someone who already joined is only removed by rotating keys.

@@ -1221,6 +1221,24 @@ impl Store for GcsStore {
         }
         Err(SErr::Unavailable("meta update contention".into()))
     }
+
+    fn invite_claim_key(&self, vid: &Id16, iid: &str, fresh: bool) -> R<Option<[u8; 32]>> {
+        let v = self.vault(vid)?;
+        Ok(invites::claim_key(&self.meta(vid, &v, fresh)?.meta.invites, iid).ok())
+    }
+
+    fn sweep_invites(&self, vid: &Id16) -> R<()> {
+        let v = self.vault(vid)?;
+        // Cached meta: at worst the erase waits for the next request after the cache refreshes.
+        if !invites::stale(&self.meta(vid, &v, false)?.meta.invites, now_ms()) {
+            return Ok(());
+        }
+        self.edit_invites(vid, None, &mut |l| {
+            invites::tidy(l, now_ms());
+            Ok(InviteOut::None)
+        })
+        .map(|_| ())
+    }
 }
 
 #[cfg(test)]

@@ -78,6 +78,12 @@ pub trait Store: Send + Sync {
     /// operations; None for a claim, whose signature `f` checks against the invite's own key.
     /// `f` may run more than once (contention) and must depend only on its input.
     fn edit_invites(&self, vid: &Id16, key: Option<&[u8; 32]>, f: &mut dyn FnMut(&mut Vec<InviteRec>) -> R<InviteOut>) -> R<InviteOut>;
+    /// Claim key of an invite; None = no such invite. From cached state unless `fresh`, so a
+    /// failed claim costs no storage read.
+    fn invite_claim_key(&self, vid: &Id16, iid: &str, fresh: bool) -> R<Option<[u8; 32]>>;
+    /// Erase invite payloads that may no longer be handed out (`invites::stale`). Run on members'
+    /// requests; cheap when there is nothing to erase.
+    fn sweep_invites(&self, vid: &Id16) -> R<()>;
 }
 
 pub fn hex(b: &[u8]) -> String {

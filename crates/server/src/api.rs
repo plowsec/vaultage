@@ -196,6 +196,28 @@ impl App {
             Err(ra) => too_many(ra),
         })
     }
+
+    /// Same for a claim, against the invite's own key: only failures (bad signature, unknown id)
+    /// are rate-limited, so junk claims never lock out the invite's holder.
+    fn authenticate_claim(&self, vid: &Id16, iid: &str, sig: &Signed, body: &[u8]) -> Result<(), Response> {
+        let mut found = self.store.invite_claim_key(vid, iid, false).map_err(serr)?;
+        if found.is_some_and(|k| sig.ok(&k, body)) {
+            return Ok(());
+        }
+        // The cache may predate the invite (created on another instance). Re-read, unless locked out.
+        if !self.authfail_rl.blocked(vid) {
+            if let Ok(k2) = self.store.invite_claim_key(vid, iid, true) {
+                if k2.is_some_and(|k| sig.ok(&k, body)) {
+                    return Ok(());
+                }
+                found = k2;
+            }
+        }
+        Err(match self.authfail_rl.hit(vid) {
+            Ok(()) => serr(if found.is_some() { SErr::BadSig } else { SErr::NoInvite }),
+            Err(ra) => too_many(ra),
+        })
+    }
 }
 
 /// Common shape of a signed vault route: authenticate, then run `op` (blocking).
@@ -212,6 +234,10 @@ async fn signed_op<T: IntoResponse>(
             Ok(k) => k,
             Err(r) => return r,
         };
+        // A member is here: erase invite payloads past their time (best effort).
+        if let Err(SErr::Unavailable(m) | SErr::Internal(m)) = app.store.sweep_invites(&vid) {
+            eprintln!("cofferd: invite sweep: {m}");
+        }
         match op(&*app.store, &vid, &key, &body) {
             Ok(r) => r.into_response(),
             Err(SErr::BadSig) => match app.authfail_rl.hit(&vid) {
@@ -655,7 +681,7 @@ async fn revoke_invite(
 }
 
 /// Signed with the invite's own claim key, not the vault key. Failed signatures and unknown ids
-/// count as auth failures (rate-limited per vault).
+/// count as auth failures (rate-limited per vault); a valid claim is never refused for them.
 async fn claim_invite(
     State(app): St,
     Path((vid, iid)): Path<(String, String)>,
@@ -671,10 +697,8 @@ async fn claim_invite(
     let body = body!(body);
     let sig = Signed::new(&method, &uri, &headers);
     blocking(move || {
-        if app.authfail_rl.blocked(&vid) {
-            if let Err(ra) = app.authfail_rl.hit(&vid) {
-                return too_many(ra);
-            }
+        if let Err(r) = app.authenticate_claim(&vid, &iid, &sig, &body) {
+            return r;
         }
         let req: InviteClaimReq = match parse_json(&body) {
             Ok(r) => r,
@@ -689,6 +713,7 @@ async fn claim_invite(
         });
         match res {
             Ok(InviteOut::Blob(blob)) => Json(InviteClaimResp { blob }).into_response(),
+            Ok(InviteOut::Gone(m)) => serr(SErr::Gone(m)),
             Ok(_) => serr(SErr::Internal("invite claim".into())),
             Err(e @ (SErr::BadSig | SErr::NoInvite)) => match app.authfail_rl.hit(&vid) {
                 Ok(()) => serr(e),

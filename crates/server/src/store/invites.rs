@@ -33,6 +33,14 @@ impl InviteRec {
         self.claimed_ms.is_none() && self.revoked_ms.is_none() && self.expires_ms > now
     }
 
+    /// May the payload still be handed out? (unclaimed and open, or claimed inside the retry window)
+    fn payload_live(&self, now: i64) -> bool {
+        match self.claimed_ms {
+            Some(t) => self.revoked_ms.is_none() && now < t + INVITE_RETRY_MS,
+            None => self.pending(now),
+        }
+    }
+
     pub fn info(&self) -> InviteInfo {
         InviteInfo {
             id: self.id.clone(),
@@ -51,16 +59,19 @@ pub enum InviteOut {
     List(Vec<InviteInfo>),
     /// Claimed payload, hex.
     Blob(String),
+    /// Claim refused: used, expired or revoked (410). Not an error, so the tidied list is written.
+    Gone(String),
+}
+
+/// Is there a payload at rest that may no longer be handed out? (`tidy` would erase it)
+pub fn stale(list: &[InviteRec], now: i64) -> bool {
+    list.iter().any(|r| !r.blob.is_empty() && !r.payload_live(now))
 }
 
 /// Drop payloads that may no longer be handed out, and old tombstones. Run before every change.
 pub fn tidy(list: &mut Vec<InviteRec>, now: i64) {
     for r in list.iter_mut() {
-        let keep = match r.claimed_ms {
-            Some(t) => r.revoked_ms.is_none() && now < t + INVITE_RETRY_MS,
-            None => r.pending(now),
-        };
-        if !keep {
+        if !r.payload_live(now) {
             r.blob.clear();
         }
     }
@@ -140,7 +151,8 @@ pub fn claim_key(list: &[InviteRec], id: &str) -> R<[u8; 32]> {
     coffer_core::hexutil::decode_array::<32>(&r.claim_pub).ok_or_else(|| SErr::Internal("stored claim key".into()))
 }
 
-/// Caller has verified the request signature against `claim_key`.
+/// Caller has verified the request signature against `claim_key`. A refusal is `Ok(Gone)`: the
+/// store then writes the tidied list, so a refused claim erases a payload that is past its time.
 pub fn claim(list: &mut Vec<InviteRec>, id: &str, nonce: &str, now: i64) -> R<InviteOut> {
     if !is_hex(nonce, 32) {
         return Err(SErr::Bad("bad nonce".into()));
@@ -149,17 +161,17 @@ pub fn claim(list: &mut Vec<InviteRec>, id: &str, nonce: &str, now: i64) -> R<In
     let tag = blake3::hash(nonce.as_bytes()).to_hex().to_string();
     let r = list.iter_mut().find(|r| r.id == id).ok_or(SErr::NoInvite)?;
     if r.revoked_ms.is_some() {
-        return Err(SErr::Gone("invite revoked".into()));
+        return Ok(InviteOut::Gone("invite revoked".into()));
     }
     if r.claimed_ms.is_some() {
         // Same claimer after a lost reply, inside the retry window: hand it out again.
         if !r.blob.is_empty() && r.claim_nonce == tag {
             return Ok(InviteOut::Blob(r.blob.clone()));
         }
-        return Err(SErr::Gone("invite already used".into()));
+        return Ok(InviteOut::Gone("invite already used".into()));
     }
     if r.expires_ms <= now {
-        return Err(SErr::Gone("invite expired".into()));
+        return Ok(InviteOut::Gone("invite expired".into()));
     }
     r.claimed_ms = Some(now);
     r.claim_nonce = tag;
@@ -194,10 +206,11 @@ mod tests {
         assert!(matches!(claim(&mut l, &a.id, &n1, now + 1), Ok(InviteOut::Blob(b)) if b == "abcd"));
         // Lost reply: same nonce gets it again within the window; anyone else is refused.
         assert!(matches!(claim(&mut l, &a.id, &n1, now + 2), Ok(InviteOut::Blob(_))));
-        assert!(matches!(claim(&mut l, &a.id, &n2, now + 2), Err(SErr::Gone(_))));
+        assert!(matches!(claim(&mut l, &a.id, &n2, now + 2), Ok(InviteOut::Gone(_))));
+        assert!(!stale(&l, now + 2) && stale(&l, now + 1 + INVITE_RETRY_MS));
         // After the window the payload is gone, even for the first claimer.
-        assert!(matches!(claim(&mut l, &a.id, &n1, now + 1 + INVITE_RETRY_MS), Err(SErr::Gone(_))));
-        assert!(l[0].blob.is_empty());
+        assert!(matches!(claim(&mut l, &a.id, &n1, now + 1 + INVITE_RETRY_MS), Ok(InviteOut::Gone(_))));
+        assert!(l[0].blob.is_empty() && !stale(&l, now + 1 + INVITE_RETRY_MS));
         // The id stays taken.
         assert!(matches!(create(&mut l, &a, now + 2), Err(SErr::Exists)));
         assert!(matches!(claim(&mut l, &"99".repeat(16), &n1, now), Err(SErr::NoInvite)));
@@ -211,8 +224,9 @@ mod tests {
         create(&mut l, &a, now).ok().unwrap();
         create(&mut l, &b, now).ok().unwrap();
         revoke(&mut l, &b.id, now + 1).ok().unwrap();
-        assert!(matches!(claim(&mut l, &b.id, &"11".repeat(16), now + 2), Err(SErr::Gone(m)) if m.contains("revoked")));
-        assert!(matches!(claim(&mut l, &a.id, &"11".repeat(16), now + 1000), Err(SErr::Gone(m)) if m.contains("expired")));
+        assert!(matches!(claim(&mut l, &b.id, &"11".repeat(16), now + 2), Ok(InviteOut::Gone(m)) if m.contains("revoked")));
+        assert!(!stale(&l, now + 999) && stale(&l, now + 1000));
+        assert!(matches!(claim(&mut l, &a.id, &"11".repeat(16), now + 1000), Ok(InviteOut::Gone(m)) if m.contains("expired")));
         assert!(l.iter().all(|r| r.blob.is_empty()));
         let mut bad = req(3, now);
         bad.expires_ms = now + INVITE_MAX_TTL_MS * 2;

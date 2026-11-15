@@ -320,3 +320,49 @@ fn fuzz_with_purges_over_http() {
         });
     }
 }
+
+/// Is a sealed invite payload at rest in the server's data directory?
+fn payload_at_rest(data: &Path) -> bool {
+    all_bytes(data).windows(6).any(|w| w == b"\"blob\"")
+}
+
+#[test]
+fn invite_payload_is_erased_and_junk_claims_block_nobody() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("server");
+    let (_h, url) = server(&data);
+    let a = Manager::new(tmp.path().join("homeA"), false).unwrap();
+    let friend = Manager::new(tmp.path().join("homeFriend"), false).unwrap();
+    let snoop = Manager::new(tmp.path().join("homeSnoop"), false).unwrap();
+    let (id, _) = a.create("Shared", Some((&url, TOKEN))).unwrap();
+    sync(&a, &id);
+    let wait = || std::thread::sleep(std::time::Duration::from_millis(400));
+
+    // Expired, then claimed with the line: refused, and the refusal erases the payload.
+    let line = a.invite(&id, "", Some(300)).unwrap();
+    assert!(payload_at_rest(&data));
+    wait();
+    gone(snoop.join_invite("X", &line), "expired");
+    assert!(!payload_at_rest(&data), "a refused claim must erase the payload");
+
+    // Expired, nobody claims: the next request from a member erases it.
+    a.invite(&id, "", Some(300)).unwrap();
+    wait();
+    assert!(payload_at_rest(&data));
+    sync(&a, &id);
+    assert!(!payload_at_rest(&data), "a member's request must erase stale payloads");
+
+    // Junk claims use up the vault's auth-failure budget; the invite's holder still gets in.
+    let real = a.invite(&id, "Real", None).unwrap();
+    let junk = |i: u32| {
+        let u = format!("{url}/v1/vaults/{id}/invites/{i:032x}/claim");
+        ureq::post(&u).header("Content-Type", "application/json").send(&br#"{"nonce":"00000000000000000000000000000000"}"#[..]).map(|_| ())
+    };
+    for i in 0..20 {
+        assert!(matches!(junk(i), Err(ureq::Error::StatusCode(404))));
+    }
+    assert!(matches!(junk(99), Err(ureq::Error::StatusCode(429))), "junk is rate-limited");
+    let (fid, key) = friend.join_invite("Shared", &real).unwrap();
+    assert!(fid == id && key.is_some());
+    gone(snoop.join_invite("X", &real), "used");
+}

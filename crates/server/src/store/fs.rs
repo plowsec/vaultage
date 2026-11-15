@@ -807,4 +807,20 @@ impl Store for FsStore {
             Ok(out)
         })
     }
+
+    fn invite_claim_key(&self, vid: &Id16, iid: &str, _fresh: bool) -> R<Option<[u8; 32]>> {
+        self.with_vault(vid, |v, _| Ok(invites::claim_key(&v.meta.invites, iid).ok()))
+    }
+
+    fn sweep_invites(&self, vid: &Id16) -> R<()> {
+        self.with_vault(vid, |v, _| {
+            let now = now_ms();
+            if !invites::stale(&v.meta.invites, now) {
+                return Ok(());
+            }
+            let mut meta = v.meta.clone();
+            invites::tidy(&mut meta.invites, now);
+            v.set_meta(meta).map_err(|e| Fail::Fatal(format!("write meta: {e}")))
+        })
+    }
 }
