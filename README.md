@@ -79,8 +79,10 @@ coffer Work sync --watch
 coffer Work empty-trash                    # erase trashed files everywhere, for good
 coffer Work prune taxes/2026.pdf           # keep only the current version
 coffer Private connect --server https://vault.example.com --token-file enroll_token   # local -> synced
-coffer Work invite Sam                     # prints server#vault-id#key (full access)
-coffer join Work --invite                  # on Sam's machine
+coffer Work invite Sam --qr                # one-time invite, 24 h (--hours N, max 168); QR on stderr
+coffer Work invites                        # waiting / used / expired / revoked
+coffer Work invites revoke 5aff71d8        # cancel an unused one
+coffer join Work --invite                  # on Sam's machine: prints Sam's own recovery key
 coffer Work rotate --passphrase            # new keys: other devices, passphrases, invites are out
 coffer Work adopt                          # on each device that stays, with the NEW secret
 coffer Work usage
@@ -103,7 +105,7 @@ The app and the CLI cannot open the same vault at the same time (directory lock)
 | Touch ID (Secure Enclave) | app, per Mac | key cannot leave the chip; never uploaded |
 | Passphrase | app, CLI | Argon2id, 128 MiB |
 | Recovery key | app, CLI | shown once at creation; the way in on a new device |
-| Invite | app, CLI | a recovery-type slot for someone else; full access |
+| Invite | app, CLI | one-time, server-held, 24 h; the joiner gets their own recovery key. See docs/SECURITY.md → Sharing |
 
 Second Mac: Join Existing Vault → server URL + vault ID + passphrase or recovery key.
 
@@ -114,7 +116,7 @@ Second Mac: Join Existing Vault → server URL + vault ID + passphrase or recove
 | Crypto, vault format, key slots, key epochs | unit tests |
 | Sync rules, crash/offline/lost-reply, malicious server | scenario tests + fuzz (in-memory and real HTTP) |
 | Purge + garbage collection (local, server, other devices, new devices) | scenario tests, fuzz with random purges (in-memory and HTTP), server tests |
-| Key rotation, revoked device, adopting device, invites, local→synced | `crates/server/tests/features.rs` over real HTTP |
+| Key rotation, revoked device, adopting device, invites (once only, revoke, expiry, rotation, old-style), local→synced | `crates/server/tests/features.rs` over real HTTP; invites also on the GCS store across two instances (`client_gcs.rs`) |
 | Server (filesystem store) | API tests: commits, races, restart, torn log, prune/GC, rekey, quota, rate limits |
 | Server (GCS store, for Cloud Run) | same API tests against an in-process fake GCS, two-instance races, lost replies, outages; client fuzz on top. Never run against real GCS |
 | CLI | two-device runs against a local server, incl. prune, empty-trash, rotate, adopt, invite |

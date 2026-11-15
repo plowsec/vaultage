@@ -63,9 +63,25 @@ coffer Work adopt                   # on every device that stays, with the NEW s
 
 ## Sharing
 
-- `coffer Work invite Sam` / Vault Settings → Invite Someone… prints `server#vault-id#key`. It is a key slot: full read/write access to the whole vault.
-- Per-file links and read-only members do not exist.
-- Removing the invite slot stops new joins with it. Someone who already joined is only removed by rotating keys.
+`coffer Work invite Sam [--qr] [--hours N]` / Vault Settings → Invite Someone… prints `server#vault-id#secret`. Full read/write access for whoever uses it first.
+
+| Property | How |
+|---|---|
+| Works once | the server holds the invite and hands its payload out once; later claims get 410 "already used" |
+| Leaked line after use | opens nothing: the secret is in no key slot, the server deleted the payload |
+| Leaked line before use | the thief joins; your recipient then gets "already used" → rotate keys |
+| Lost reply during the claim | the same join attempt (same nonce) may fetch it again for 10 min; nobody else |
+| Expiry | 24 h default, 7 days max; revocable while unused (`coffer Work invites revoke <id>`, Vault Settings → Sharing) |
+| Rotation | drops every open invite |
+| Server's view | invite id, claim public key, sealed payload, sealed label, times. Never the secret, the vault key or the label |
+| Joiner | gets a recovery key of their own (new slot, shown once); the invite key is not a way in |
+
+Derivation (BLAKE3 from the 32-byte secret): invite id, Ed25519 claim key (signs the claim), wrap key (seals vault key + label, bound to vault and invite id).
+
+- Not protected: a server operator who keeps the payload and later reads the line. Treat the server like the chat: it alone can't open anything; both together can.
+- QR code (Mac invite sheet, iPhone invite sheet, `--qr`): scan it in Vaultage (Join → Scan QR Code). The iPhone Camera app would open the `https://` line in Safari and keep it in history.
+- Old-style invites (a recovery slot labelled "Invite…", created before this change) still join and keep working until removed under Unlock Methods.
+- Per-file links and read-only members do not exist. Someone who already joined is only removed by rotating keys.
 
 ## Purging
 
@@ -173,7 +189,7 @@ Not covered on iOS: a jailbroken device or a malicious build while a vault is un
 - No independent audit. Crypto crates are RustCrypto/dalek/BLAKE3; composition is ours.
 - Certificate pinning is opt-in and pins a CA or a self-signed server certificate you supply (`coffer trust`, iOS: Certificate Pinning). No trust-on-first-use, no public-key pinning of a public-CA leaf. Unpinned servers are checked against the bundled Mozilla roots.
 - Rotation does not re-encrypt old data; a revoked device keeps what it already downloaded.
-- Any member can purge, rotate or invite. There are no roles.
+- Any member can purge, rotate, invite or revoke invites. There are no roles.
 - Passphrase typed into the app can be keylogged by root/accessibility malware. Touch ID avoids typing.
 - File names and content pass through Swift/AppKit objects that cannot be reliably zeroed.
 - Preview parsers (images, PDF) run in the same process as the keys.
