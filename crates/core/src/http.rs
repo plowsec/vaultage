@@ -164,6 +164,32 @@ impl HttpRemote {
         }
     }
 
+    /// Store a one-time invite on the server (see `invite`).
+    pub fn create_invite(&self, req: &InviteCreateReq) -> Result<()> {
+        match self.signed("POST", "invites", Some(&serde_json::to_vec(req)?), true)? {
+            (200 | 201, _) => Ok(()),
+            (s, b) => Err(server_error(s, &b)),
+        }
+    }
+
+    pub fn list_invites(&self) -> Result<Vec<InviteInfo>> {
+        match self.signed("GET", "invites", None, true)? {
+            (200, b) => Ok(serde_json::from_slice::<InvitesResp>(&b)?.invites),
+            (s, b) => Err(server_error(s, &b)),
+        }
+    }
+
+    pub fn revoke_invite(&self, invite_id: &str) -> Result<()> {
+        if hexutil::decode_array::<16>(invite_id).is_none() {
+            return Err(Error::Invalid("invite id must be 32 hex characters".into()));
+        }
+        match self.signed("POST", &format!("invites/{invite_id}/revoke"), Some(b"{}"), true)? {
+            (200, _) => Ok(()),
+            (404, _) => Err(Error::NotFound("no such invite".into())),
+            (s, b) => Err(server_error(s, &b)),
+        }
+    }
+
     /// Upload the portable header. Ok(false) = the server already has this or a newer version.
     pub fn put_header(&self, header: &Header) -> Result<bool> {
         match self.signed("PUT", "header", Some(&serde_json::to_vec(header)?), true)? {
@@ -196,6 +222,34 @@ pub fn fetch_header(url: &str, vault_id_hex: &str) -> Result<Header> {
         (200, b) => Ok(serde_json::from_slice(&b)?),
         (404, _) => Err(Error::NotFound("no such vault on this server".into())),
         (s, b) => Err(server_error(s, &b)),
+    }
+}
+
+/// Claim a one-time invite: returns its sealed payload. Signed with the invite's claim key.
+/// Network failures are retried with the same nonce, so a lost reply doesn't burn the invite.
+pub fn claim_invite(url: &str, vault_id_hex: &str, keys: &crate::invite::InviteKeys) -> Result<Vec<u8>> {
+    let base = check_url(url)?;
+    let agent = agent(&base);
+    let path = format!("/v1/vaults/{vault_id_hex}/invites/{}/claim", keys.id);
+    let body = serde_json::to_vec(&InviteClaimReq { nonce: hexutil::encode(&crate::crypto::random::<16>()) })?;
+    let mut attempt = 0;
+    loop {
+        let auth = sign_request(&keys.claim, "POST", &path, now_ms(), &body);
+        let res = call(&agent, "POST", &format!("{base}{path}"), &[("Authorization", &auth), ("Content-Type", "application/json")], Some(&body));
+        match res {
+            Ok((200, b)) => {
+                let r: InviteClaimResp = serde_json::from_slice(&b)?;
+                return hexutil::decode(&r.blob).ok_or_else(|| Error::Format("invite blob".into()));
+            }
+            Ok((404, _)) => return Err(Error::NotFound("no such invite on this server".into())),
+            Ok((s, b)) => return Err(server_error(s, &b)),
+            Err(e @ Error::Net(_)) if attempt >= 3 => return Err(e),
+            Err(Error::Net(_)) => {
+                attempt += 1;
+                std::thread::sleep(Duration::from_millis(500 << attempt));
+            }
+            Err(e) => return Err(e),
+        }
     }
 }
 

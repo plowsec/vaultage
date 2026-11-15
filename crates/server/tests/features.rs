@@ -216,41 +216,91 @@ fn rotation_revokes_other_devices_until_they_adopt() {
     assert_eq!(read(&c, &id, "new.txt"), b"only for the new keys");
 }
 
+fn gone(r: Result<(String, Option<String>), Error>, why: &str) {
+    match r {
+        Err(Error::Server(410, m)) => assert!(m.contains(why), "{m}"),
+        other => panic!("expected 410 '{why}', got {other:?}"),
+    }
+}
+
 #[test]
-fn invites_and_slot_changes_travel() {
+fn invites_work_once_and_slot_changes_travel() {
     let tmp = tempfile::tempdir().unwrap();
     let (_h, url) = server(&tmp.path().join("server"));
     let a = Manager::new(tmp.path().join("homeA"), false).unwrap();
     let friend = Manager::new(tmp.path().join("homeFriend"), false).unwrap();
-    let (id, _) = a.create("Shared", Some((&url, TOKEN))).unwrap();
+    let snoop = Manager::new(tmp.path().join("homeSnoop"), false).unwrap();
+    let (id, a_key) = a.create("Shared", Some((&url, TOKEN))).unwrap();
     put(&a, &id, "plan.txt", b"shared plan");
     sync(&a, &id);
 
-    let code = a.invite(&id, "Sam").unwrap();
+    let code = a.invite(&id, "Sam", None).unwrap();
+    assert_eq!(code.split('#').count(), 3);
+    // Not a key slot: nothing in the public header opens with it.
+    assert!(!a.list()[0].slots.iter().any(|s| s.label.starts_with("Invite")));
+    assert!(snoop.join("X", &url, &id, SlotKind::Recovery, code.rsplit('#').next().unwrap().as_bytes()).is_err());
     assert!(friend.join_invite("Shared", "garbage").is_err());
-    let fid = friend.join_invite("Shared", &code).unwrap();
+
+    let (fid, sam_key) = friend.join_invite("Shared", &code).unwrap();
     assert_eq!(fid, id);
+    let sam_key = sam_key.expect("one-time invite gives the joiner a recovery key");
     sync(&friend, &id);
     assert_eq!(read(&friend, &id, "plan.txt"), b"shared plan");
-    put(&friend, &id, "from-sam.txt", b"hi");
-    // The friend sets their own passphrase; it reaches A's header through the server.
+
+    // Used up: the same line, read later from a chat, gets nothing.
+    gone(snoop.join_invite("X", &code), "used");
+    assert!(snoop.list().is_empty());
+
+    // Sam's own slots reach A's header through the server.
     friend.add_slot(&id, SlotKind::Passphrase, "Sam's passphrase", b"sams passphrase", Value::Null, weak()).unwrap();
+    put(&friend, &id, "from-sam.txt", b"hi");
     sync(&friend, &id);
-    a.lock(&id);
-    a.unlock(&id, SlotKind::Recovery, None, code.rsplit('#').next().unwrap().as_bytes()).unwrap();
+    a.lock(&id); // the server header is read once per unlock
+    a.unlock(&id, SlotKind::Recovery, None, a_key.as_bytes()).unwrap();
     sync(&a, &id);
     assert_eq!(read(&a, &id, "from-sam.txt"), b"hi");
-    assert!(a.list()[0].slots.iter().any(|s| s.label == "Sam's passphrase"));
-    assert!(a.list()[0].slots.iter().any(|s| s.label == "Invite: Sam"));
+    let labels: Vec<String> = a.list()[0].slots.iter().map(|s| s.label.clone()).collect();
+    assert!(labels.contains(&"Sam's passphrase".into()) && labels.contains(&"Recovery key (Sam)".into()), "{labels:?}");
+    // Sam's recovery key is a real way in (new device).
+    let sam2 = Manager::new(tmp.path().join("homeSam2"), false).unwrap();
+    sam2.join("Shared", &url, &id, SlotKind::Recovery, sam_key.as_bytes()).unwrap();
 
-    // Revoking Sam = rotating. Sam's invite and passphrase die with the old key.
-    let rec = a.rotate_prepare(&id, None, None).unwrap();
+    let list = a.invites(&id).unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!((list[0].state.as_str(), list[0].label.as_str()), ("used", "Sam"));
+    assert!(list[0].claimed.is_some());
+
+    // Revoked before use.
+    let wrong = a.invite(&id, "Wrong person", None).unwrap();
+    let iid = a.invites(&id).unwrap().into_iter().find(|i| i.state == "waiting").unwrap().id;
+    a.revoke_invite(&id, &iid).unwrap();
+    gone(snoop.join_invite("X", &wrong), "revoked");
+    // Expired.
+    let short = a.invite(&id, "", Some(300)).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    gone(snoop.join_invite("X", &short), "expired");
+    assert!(a.invite(&id, "", Some(8 * 24 * 3600 * 1000)).is_err());
+    let states: Vec<String> = a.invites(&id).unwrap().into_iter().map(|i| i.state).collect();
+    assert_eq!(states, ["expired", "revoked", "used"]);
+
+    // Old-style invite (a recovery slot in the header) still joins, and keeps working.
+    let old_key = coffer_core::crypto::random::<32>();
+    a.get(&id).unwrap().v().edit_header(|h, vmk| h.add_slot(vmk, SlotKind::Recovery, "Invite: Old", &old_key, None, Value::Null)).unwrap();
+    sync(&a, &id);
+    let old_line = format!("{url}#{id}#{}", coffer_core::crypto::recovery_encode(&old_key));
+    let oldie = Manager::new(tmp.path().join("homeOld"), false).unwrap();
+    assert_eq!(oldie.join_invite("Shared", &old_line).unwrap(), (id.clone(), None));
+
+    // Rotation drops open invites and cuts Sam off.
+    let later = a.invite(&id, "Later", None).unwrap();
+    a.rotate_prepare(&id, None, None).unwrap();
     a.rotate_commit(&id).unwrap();
     sync(&a, &id);
+    assert!(a.invites(&id).unwrap().is_empty());
+    assert!(matches!(snoop.join_invite("X", &later), Err(Error::NotFound(_))));
     assert!(friend.get(&id).unwrap().sync_blocking().is_err());
     assert!(friend.adopt_rekey(&id, SlotKind::Passphrase, b"sams passphrase").is_err());
-    assert!(friend.adopt_rekey(&id, SlotKind::Recovery, code.rsplit('#').next().unwrap().as_bytes()).is_err());
-    let _ = rec;
+    assert!(friend.adopt_rekey(&id, SlotKind::Recovery, sam_key.as_bytes()).is_err());
 }
 
 #[test]

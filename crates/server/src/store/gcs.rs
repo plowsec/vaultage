@@ -703,12 +703,15 @@ impl GcsStore {
             if version <= m.p.version {
                 return Err(SErr::StaleHeader);
             }
-            let new = Meta::new(
+            let mut new = Meta::new(
                 new_pub.unwrap_or(&m.p.auth_pub),
                 header,
                 m.meta.created_ms,
                 Some(&m.meta.create_id),
             )?;
+            if new_pub.is_none() {
+                new.invites = m.meta.invites.clone(); // rekey drops them: they carry old keys
+            }
             let bytes = new.encode();
             let gen = match self.c.insert(&name, &bytes, m.gen, &[]) {
                 Ok(o) => o.gen,
@@ -1183,6 +1186,40 @@ impl Store for GcsStore {
             records,
             quota: self.quota,
         })
+    }
+
+    fn edit_invites(&self, vid: &Id16, key: Option<&[u8; 32]>, f: &mut dyn FnMut(&mut Vec<InviteRec>) -> R<InviteOut>) -> R<InviteOut> {
+        let v = self.vault(vid)?;
+        let name = self.meta_name(vid);
+        for _ in 0..8 {
+            let m = self.meta(vid, &v, true)?;
+            if key.is_some_and(|k| m.p.auth_pub != *k) {
+                return Err(SErr::BadSig);
+            }
+            let mut list = m.meta.invites.clone();
+            let out = f(&mut list)?;
+            if list == m.meta.invites {
+                return Ok(out);
+            }
+            let mut new = m.meta.clone();
+            new.invites = list;
+            let bytes = new.encode();
+            let gen = match self.c.insert(&name, &bytes, m.gen, &[]) {
+                Ok(o) => o.gen,
+                Err(GErr::Precondition) => match self.c.get_gen(&name)? {
+                    Some((b, g)) if b == bytes => g,
+                    _ => continue,
+                },
+                Err(e) => return Err(e.into()),
+            };
+            let (meta, p) = Meta::decode(&bytes).map_err(SErr::Internal)?;
+            let mut g = lock(&v.meta);
+            if gen >= g.gen {
+                *g = MetaCache { at: Instant::now(), gen, meta, p };
+            }
+            return Ok(out);
+        }
+        Err(SErr::Unavailable("meta update contention".into()))
     }
 }
 

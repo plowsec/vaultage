@@ -15,11 +15,13 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use coffer_core::hexutil;
 use coffer_core::proto::{
-    verify_request, CommitReq, CommitResp, ConflictResp, CreateVaultReq, ErrorResp, LogResp, MissingReq, MissingResp,
-    PruneReq, RekeyReq, WireRecord, ENROLL_HEADER, MAX_CHUNK_BODY, MAX_JSON_BODY,
+    verify_request, CommitReq, CommitResp, ConflictResp, CreateVaultReq, ErrorResp, InviteClaimReq, InviteClaimResp,
+    InviteCreateReq, InvitesResp, LogResp, MissingReq, MissingResp, PruneReq, RekeyReq, WireRecord, ENROLL_HEADER,
+    MAX_CHUNK_BODY, MAX_JSON_BODY,
 };
 
 use crate::ratelimit::Limiter;
+use crate::store::invites::{self, InviteOut};
 use crate::store::{self, hex, is_hex, Cid, CommitIn, Id16, SErr, Store};
 use crate::{Config, StoreKind};
 
@@ -73,6 +75,8 @@ fn serr(e: SErr) -> Response {
         SErr::Bad(m) => err(StatusCode::BAD_REQUEST, &m),
         SErr::Quota => err(StatusCode::INSUFFICIENT_STORAGE, "vault quota exceeded"),
         SErr::NoChunk => err(StatusCode::NOT_FOUND, "no such chunk"),
+        SErr::NoInvite => err(StatusCode::NOT_FOUND, "no such invite"),
+        SErr::Gone(m) => err(StatusCode::GONE, &m),
         SErr::Unavailable(m) => {
             eprintln!("cofferd: storage unavailable: {m}");
             let mut r = err(StatusCode::SERVICE_UNAVAILABLE, "storage temporarily unavailable");
@@ -244,6 +248,9 @@ pub fn router(cfg: Config) -> std::io::Result<Router> {
         .route("/v1/vaults/{vid}/prune", post(prune))
         .route("/v1/vaults/{vid}/rekey", post(rekey))
         .route("/v1/vaults/{vid}/usage", get(usage))
+        .route("/v1/vaults/{vid}/invites", get(list_invites).post(create_invite))
+        .route("/v1/vaults/{vid}/invites/{iid}/revoke", post(revoke_invite))
+        .route("/v1/vaults/{vid}/invites/{iid}/claim", post(claim_invite))
         .route(
             "/v1/vaults/{vid}/chunks/{cid}",
             get(get_chunk)
@@ -270,14 +277,24 @@ async fn cap_len(limit: usize, req: Request, next: Next) -> Response {
     next.run(req).await
 }
 
-/// Vault ids grant header reads: log only an 8-char prefix.
+/// Vault ids grant header reads: log only an 8-char prefix (of invite ids too).
 fn redact_path(path: &str) -> String {
     match path.strip_prefix("/v1/vaults/") {
         Some(rest) => {
             let (vid, tail) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+            let tail = match tail.strip_prefix("/invites/") {
+                Some(t) => {
+                    let (iid, more) = t.split_at(t.find('/').unwrap_or(t.len()));
+                    match iid.get(..8) {
+                        Some(p) if iid.len() > 8 => format!("/invites/{p}…{more}"),
+                        _ => tail.to_owned(),
+                    }
+                }
+                None => tail.to_owned(),
+            };
             match vid.get(..8) {
                 Some(p) if vid.len() > 8 => format!("/v1/vaults/{p}…{tail}"),
-                _ => path.to_owned(),
+                _ => format!("/v1/vaults/{vid}{tail}"),
             }
         }
         None => path.to_owned(),
@@ -583,6 +600,102 @@ async fn get_chunk(
     signed_op(app, vid, sig, Bytes::new(), move |s, vid, key, _| {
         let b = s.get_chunk(vid, key, &cid)?;
         Ok(([(header::CONTENT_TYPE, "application/octet-stream")], b))
+    })
+    .await
+}
+
+async fn create_invite(
+    State(app): St,
+    Path(vid): Path<String>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Response {
+    let body = body!(body);
+    let sig = Signed::new(&method, &uri, &headers);
+    signed_op(app, vid, sig, body, |s, vid, key, body| {
+        let req: InviteCreateReq = parse_json(body)?;
+        invites::validate(&req, store::now_ms())?;
+        s.edit_invites(vid, Some(key), &mut |l| invites::create(l, &req, store::now_ms()))?;
+        Ok(ok_empty(StatusCode::CREATED))
+    })
+    .await
+}
+
+async fn list_invites(State(app): St, Path(vid): Path<String>, method: Method, uri: Uri, headers: HeaderMap) -> Response {
+    let sig = Signed::new(&method, &uri, &headers);
+    signed_op(app, vid, sig, Bytes::new(), |s, vid, key, _| {
+        match s.edit_invites(vid, Some(key), &mut |l| invites::list_all(l, store::now_ms()))? {
+            InviteOut::List(invites) => Ok(Json(InvitesResp { invites })),
+            _ => Err(SErr::Internal("invite list".into())),
+        }
+    })
+    .await
+}
+
+async fn revoke_invite(
+    State(app): St,
+    Path((vid, iid)): Path<(String, String)>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Response {
+    if !is_hex(&iid, 32) {
+        return err(StatusCode::BAD_REQUEST, "bad invite id");
+    }
+    let body = body!(body);
+    let sig = Signed::new(&method, &uri, &headers);
+    signed_op(app, vid, sig, body, move |s, vid, key, _| {
+        s.edit_invites(vid, Some(key), &mut |l| invites::revoke(l, &iid, store::now_ms()))?;
+        Ok(ok_empty(StatusCode::OK))
+    })
+    .await
+}
+
+/// Signed with the invite's own claim key, not the vault key. Failed signatures and unknown ids
+/// count as auth failures (rate-limited per vault).
+async fn claim_invite(
+    State(app): St,
+    Path((vid, iid)): Path<(String, String)>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Response {
+    let Some(vid) = parse_id16(&vid) else { return bad_vid() };
+    if !is_hex(&iid, 32) {
+        return err(StatusCode::BAD_REQUEST, "bad invite id");
+    }
+    let body = body!(body);
+    let sig = Signed::new(&method, &uri, &headers);
+    blocking(move || {
+        if app.authfail_rl.blocked(&vid) {
+            if let Err(ra) = app.authfail_rl.hit(&vid) {
+                return too_many(ra);
+            }
+        }
+        let req: InviteClaimReq = match parse_json(&body) {
+            Ok(r) => r,
+            Err(e) => return serr(e),
+        };
+        let res = app.store.edit_invites(&vid, None, &mut |l| {
+            let k = invites::claim_key(l, &iid)?;
+            if !sig.ok(&k, &body) {
+                return Err(SErr::BadSig);
+            }
+            invites::claim(l, &iid, &req.nonce, store::now_ms())
+        });
+        match res {
+            Ok(InviteOut::Blob(blob)) => Json(InviteClaimResp { blob }).into_response(),
+            Ok(_) => serr(SErr::Internal("invite claim".into())),
+            Err(e @ (SErr::BadSig | SErr::NoInvite)) => match app.authfail_rl.hit(&vid) {
+                Ok(()) => serr(e),
+                Err(ra) => too_many(ra),
+            },
+            Err(e) => serr(e),
+        }
     })
     .await
 }

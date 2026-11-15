@@ -40,8 +40,10 @@
 //! | rotate_commit | id | null — new keys in effect; all old slots, devices and invites are out |
 //! | rotate_cancel | id | null |
 //! | adopt_rekey | id, kind + secret | null — after status.sync.state == "rekeyed" |
-//! | invite | id, label | {code} |
-//! | join_invite | name + secret (the invite code) | {id} |
+//! | invite | id, label, ttl_ms? | {code} — one-time invite, default 24 h |
+//! | invites | id | [invite::InviteStatus] |
+//! | revoke_invite | id, invite | null |
+//! | join_invite | name + secret (the invite code) | {id, recovery_key?} — recovery_key: this member's own, show once |
 //! | usage | id | proto::UsageResp |
 //! | put | id, path, mtime?, unique? + secret (the file's bytes) | {id, path} — import from memory |
 //! | trust | | [{url, pem}] — servers pinned to specific certificates |
@@ -220,10 +222,16 @@ fn dispatch(m: &Manager, req: &Value, secret: &[u8]) -> Result<Value> {
             m.adopt_rekey(s(req, "id")?, kind(req)?, secret)?;
             Value::Null
         }
-        "invite" => json!({ "code": m.invite(s(req, "id")?, req.get("label").and_then(Value::as_str).unwrap_or(""))? }),
+        "invite" => json!({ "code": m.invite(s(req, "id")?, req.get("label").and_then(Value::as_str).unwrap_or(""), req.get("ttl_ms").and_then(Value::as_i64))? }),
+        "invites" => to(&m.invites(s(req, "id")?)?),
+        "revoke_invite" => {
+            m.revoke_invite(s(req, "id")?, s(req, "invite")?)?;
+            Value::Null
+        }
         "join_invite" => {
             let code = std::str::from_utf8(secret).map_err(|_| Error::Invalid("not a valid invite".into()))?;
-            json!({ "id": m.join_invite(s(req, "name")?, code)? })
+            let (id, recovery) = m.join_invite(s(req, "name")?, code)?;
+            json!({ "id": id, "recovery_key": recovery })
         }
         "usage" => to(&m.usage(s(req, "id")?)?),
         "put" => {

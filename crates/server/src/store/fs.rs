@@ -502,12 +502,15 @@ impl FsStore {
             if version <= v.header_version {
                 return Err(SErr::StaleHeader.into());
             }
-            let meta = Meta::new(
+            let mut meta = Meta::new(
                 new_pub.unwrap_or(&v.auth_pub),
                 header,
                 v.meta.created_ms,
                 Some(&v.meta.create_id),
             )?;
+            if new_pub.is_none() {
+                meta.invites = v.meta.invites.clone(); // rekey drops them: they carry old keys
+            }
             // On failure the rename may or may not have landed: cached state is unreliable.
             v.set_meta(meta).map_err(|e| Fail::Fatal(format!("write meta: {e}")))
         })
@@ -786,6 +789,22 @@ impl Store for FsStore {
                 records: v.head(),
                 quota: self.quota,
             })
+        })
+    }
+
+    fn edit_invites(&self, vid: &Id16, key: Option<&[u8; 32]>, f: &mut dyn FnMut(&mut Vec<InviteRec>) -> R<InviteOut>) -> R<InviteOut> {
+        self.with_vault(vid, |v, _| {
+            if let Some(k) = key {
+                key_check(v, k)?;
+            }
+            let mut list = v.meta.invites.clone();
+            let out = f(&mut list)?;
+            if list != v.meta.invites {
+                let mut meta = v.meta.clone();
+                meta.invites = list;
+                v.set_meta(meta).map_err(|e| Fail::Fatal(format!("write meta: {e}")))?;
+            }
+            Ok(out)
         })
     }
 }

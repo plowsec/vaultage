@@ -468,23 +468,106 @@ impl Manager {
         Ok(vault_id)
     }
 
-    /// Share a synced vault: adds a key slot for someone else and returns a one-line invite
-    /// (`server#vault-id#key`). Whoever has it gets full read/write access; to revoke, rotate keys.
-    pub fn invite(&self, id: &str, label: &str) -> Result<String> {
+    /// Share a synced vault: stores a one-time invite on the server and returns the line
+    /// (`server#vault-id#secret`). It works once, until `ttl_ms` (default 24 h) or until revoked.
+    /// Whoever claims it gets full read/write access; to cut someone off, rotate keys.
+    pub fn invite(&self, id: &str, label: &str, ttl_ms: Option<i64>) -> Result<String> {
         let ov = self.get(id)?;
         let http = ov.http().ok_or_else(|| Error::Invalid("only a synced vault can be shared; connect it to a server first".into()))?;
-        let key = crypto::random::<32>();
-        let label = if label.trim().is_empty() { "Invite".to_string() } else { format!("Invite: {}", label.trim()) };
-        ov.v().edit_header(|h, vmk| h.add_slot(vmk, SlotKind::Recovery, &label, &key, None, serde_json::Value::Null))?;
-        // The invite only works once the server has the new slot.
-        ov.sync_blocking()?;
-        Ok(format!("{}#{}#{}", http.url(), id, crypto::recovery_encode(&key)))
+        let ttl = ttl_ms.unwrap_or(crate::invite::DEFAULT_TTL_MS);
+        if ttl <= 0 || ttl > crate::proto::INVITE_MAX_TTL_MS {
+            return Err(Error::Invalid("an invite can last at most 7 days".into()));
+        }
+        let secret = Key::random();
+        let ik = crate::invite::InviteKeys::from_secret(&secret);
+        let label = label.trim();
+        let keys = ov.v().keys();
+        let req = crate::proto::InviteCreateReq {
+            id: ik.id.clone(),
+            claim_pub: ik.claim_pub_hex(),
+            blob: crate::hexutil::encode(&ik.seal_payload(id, &keys.vmk, label)),
+            info: crate::hexutil::encode(&crate::invite::seal_info(&keys.vmk, id, &ik.id, label)),
+            expires_ms: now_ms() + ttl,
+        };
+        http.create_invite(&req)?;
+        Ok(format!("{}#{}#{}", http.url(), id, crypto::recovery_encode(secret.expose())))
     }
 
-    pub fn join_invite(&self, name: &str, code: &str) -> Result<String> {
-        let parts: Vec<&str> = code.trim().split('#').collect();
-        let [url, vault, key] = parts[..] else { return Err(Error::Invalid("not a valid invite".into())) };
-        self.join(name, url, vault, SlotKind::Recovery, key.as_bytes())
+    /// This vault's invites on the server (waiting, used, expired, revoked), newest first.
+    pub fn invites(&self, id: &str) -> Result<Vec<crate::invite::InviteStatus>> {
+        let ov = self.get(id)?;
+        let http = ov.http().ok_or_else(|| Error::Invalid("this vault is not synced".into()))?;
+        let vmk = ov.v().keys().vmk.clone();
+        let now = now_ms();
+        let mut out: Vec<_> = http
+            .list_invites()?
+            .into_iter()
+            .map(|i| {
+                let label = crate::hexutil::decode(&i.info).and_then(|b| crate::invite::open_info(&vmk, id, &i.id, &b)).unwrap_or_default();
+                let state = if i.revoked_ms.is_some() {
+                    "revoked"
+                } else if i.claimed_ms.is_some() {
+                    "used"
+                } else if i.expires_ms <= now {
+                    "expired"
+                } else {
+                    "waiting"
+                };
+                crate::invite::InviteStatus { id: i.id, label, created: i.created_ms, expires: i.expires_ms, claimed: i.claimed_ms, revoked: i.revoked_ms, state: state.into() }
+            })
+            .collect();
+        out.sort_by_key(|i| std::cmp::Reverse(i.created));
+        Ok(out)
+    }
+
+    pub fn revoke_invite(&self, id: &str, invite_id: &str) -> Result<()> {
+        let ov = self.get(id)?;
+        let http = ov.http().ok_or_else(|| Error::Invalid("this vault is not synced".into()))?;
+        http.revoke_invite(&invite_id.trim().to_lowercase())
+    }
+
+    /// Join with an invite line. One-time invite: claims it (the server then deletes it), adds a
+    /// new recovery key of this member's own and returns it (show once). An old-style invite
+    /// (a key slot in the header) joins as before and returns no recovery key.
+    pub fn join_invite(&self, name: &str, code: &str) -> Result<(String, Option<String>)> {
+        let line = crate::invite::parse_line(code)?;
+        let url = http::check_url(&line.url)?;
+        if self.vref(&line.vault).is_ok() {
+            return Err(Error::Exists("this vault is already on this device".into()));
+        }
+        let secret = crypto::recovery_decode(&line.secret).map_err(|_| Error::Invalid("not a valid invite: bad key".into()))?;
+        let ik = crate::invite::InviteKeys::from_secret(&secret);
+        let blob = match http::claim_invite(&url, &line.vault, &ik) {
+            Ok(b) => b,
+            Err(Error::NotFound(_)) => {
+                // Not a one-time invite: maybe an old-style one (key slot in the header).
+                return match self.join(name, &url, &line.vault, SlotKind::Recovery, line.secret.as_bytes()) {
+                    Ok(id) => Ok((id, None)),
+                    Err(Error::Crypto(_)) | Err(Error::NotFound(_)) => Err(Error::NotFound("this invite doesn't exist on the server: it was never created there, or the vault's keys were rotated".into())),
+                    Err(e) => Err(e),
+                };
+            }
+            Err(Error::Server(410, m)) => return Err(Error::Server(410, m)),
+            Err(e) => return Err(e),
+        };
+        let (vmk, label) = ik.open_payload(&line.vault, &blob)?;
+        let header = http::fetch_header(&url, &line.vault)?;
+        if header.vault_id != line.vault {
+            return Err(Error::Integrity("server returned a different vault".into()));
+        }
+        header.verify(&vmk).map_err(|_| Error::Invalid("the vault's keys were rotated after this invite was made; ask for a new invite".into()))?;
+        let path = self.home.join("vaults").join(&line.vault);
+        Vault::init(&path, &header, Some(url.clone()))?;
+        let mut vault = Vault::open(&path, vmk, &self.device())?;
+        // Our own way back in. Pushed to the server by the first sync (header version goes up).
+        let recovery = crypto::random::<32>();
+        let slot_label = if label.is_empty() { "Recovery key (joined)".to_string() } else { format!("Recovery key ({label})") };
+        vault.edit_header(|h, vmk| h.add_slot(vmk, SlotKind::Recovery, &slot_label, &recovery, None, serde_json::Value::Null))?;
+        let r = VaultRef { id: line.vault.clone(), name: if name.trim().is_empty() { "Vault".into() } else { name.trim().to_string() }, path, remote: Some(url) };
+        self.register(r.clone())?;
+        let ov = self.install(&r, vault)?;
+        ov.wake();
+        Ok((line.vault, Some(crypto::recovery_encode(&recovery))))
     }
 
     /// Turn a local vault into a synced one: uploads its whole kept history to a server that does

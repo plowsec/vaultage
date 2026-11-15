@@ -13,6 +13,11 @@
 //!   POST /v1/vaults/{vid}/prune          signed; PruneReq -> PruneResp
 //!   POST /v1/vaults/{vid}/rekey          signed with the CURRENT key; RekeyReq -> 200 | 409
 //!   GET  /v1/vaults/{vid}/usage          signed -> UsageResp
+//!   POST /v1/vaults/{vid}/invites        signed; InviteCreateReq -> 201 | 409 (id known) | 400
+//!   GET  /v1/vaults/{vid}/invites        signed -> InvitesResp
+//!   POST /v1/vaults/{vid}/invites/{iid}/revoke   signed -> 200 | 404
+//!   POST /v1/vaults/{vid}/invites/{iid}/claim    signed with the INVITE's claim key; InviteClaimReq
+//!                                        -> 200 InviteClaimResp | 404 | 410 (used, expired, revoked)
 //! Errors: `{ "error": "..." }` with 400/401/403/404/409/413/422/429/507.
 //!
 //! Signed requests carry `Authorization: Coffer ts=<unix_ms>,sig=<hex ed25519>` over
@@ -23,6 +28,11 @@
 //! entry's current rev: the newest record is never pruned. Chunks no longer referenced by any
 //! unpruned record are then deleted, unless uploaded within the grace period (in-flight uploads).
 //! Idempotent. Pruned records come back from `log` with an empty `blob`.
+//!
+//! Invites: one-time. A claim returns the sealed payload once and marks the invite used; the same
+//! `nonce` may claim again for `INVITE_RETRY_MS` (lost reply), after which the payload is
+//! deleted. Used/expired/revoked invites stay as tombstones (no payload) so an id is never reused.
+//! Rekey drops every invite.
 //!
 //! Rekey: atomically replaces the vault's `auth_pub` and header (header.version must increase).
 //! From then on only the new key signs.
@@ -139,6 +149,54 @@ pub struct UsageResp {
     pub records: u64,
     /// Per-vault chunk byte limit, if the server enforces one.
     pub quota: Option<u64>,
+}
+
+/// Longest lifetime the server accepts for an invite.
+pub const INVITE_MAX_TTL_MS: i64 = 7 * 24 * 3600 * 1000;
+/// Unclaimed, unexpired invites per vault.
+pub const INVITE_MAX_PENDING: usize = 32;
+/// After a claim, the same claimer may fetch the payload again for this long.
+pub const INVITE_RETRY_MS: i64 = 10 * 60 * 1000;
+/// Largest `blob` / `info`, hex characters.
+pub const INVITE_MAX_FIELD: usize = 4096;
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct InviteCreateReq {
+    /// 16 bytes hex, derived from the invite secret.
+    pub id: String,
+    /// Ed25519 public key (hex) that must sign the claim.
+    pub claim_pub: String,
+    /// Sealed payload, hex. Handed out once.
+    pub blob: String,
+    /// Label sealed under the vault key, hex. For members only.
+    pub info: String,
+    pub expires_ms: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct InviteClaimReq {
+    /// 16 random bytes hex, fresh per join attempt; lets a retry after a lost reply succeed.
+    pub nonce: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct InviteClaimResp {
+    pub blob: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct InviteInfo {
+    pub id: String,
+    pub info: String,
+    pub created_ms: i64,
+    pub expires_ms: i64,
+    pub claimed_ms: Option<i64>,
+    pub revoked_ms: Option<i64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct InvitesResp {
+    pub invites: Vec<InviteInfo>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

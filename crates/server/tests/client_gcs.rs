@@ -75,3 +75,29 @@ fn two_devices_two_server_instances_on_one_bucket() {
     sync(&b, &id);
     assert_eq!(read(&b, &id, "after.txt"), b"new epoch");
 }
+
+#[test]
+fn one_time_invite_across_instances() {
+    let env = Env::new(Kind::Gcs);
+    let (h1, h2) = (env.start(), env.start());
+    let (url1, url2) = (format!("http://{}", h1.addr()), format!("http://{}", h2.addr()));
+    let tmp = tempfile::tempdir().unwrap();
+    let a = Manager::new(tmp.path().join("homeA"), false).unwrap();
+    let (id, _) = a.create("Docs", Some((&url1, TOKEN))).unwrap();
+    a.get(&id).unwrap().v().put_bytes("a.txt", b"from A", 1).unwrap();
+    a.get(&id).unwrap().sync_blocking().unwrap();
+    let code = a.invite(&id, "B", None).unwrap();
+    // A header write after the invite keeps it (meta is one document).
+    a.add_slot(&id, SlotKind::Passphrase, "pw", b"pw", serde_json::Value::Null, Some(coffer_core::crypto::KdfParams::weak_for_tests())).unwrap();
+    a.get(&id).unwrap().sync_blocking().unwrap();
+
+    // Claimed through instance 2, refused through instance 1.
+    let b = Manager::new(tmp.path().join("homeB"), false).unwrap();
+    let (bid, key) = b.join_invite("Docs", &code.replacen(&url1, &url2, 1)).unwrap();
+    assert!(key.is_some() && bid == id);
+    let r = b.get(&id).unwrap().sync_blocking().unwrap();
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    let c = Manager::new(tmp.path().join("homeC"), false).unwrap();
+    assert!(matches!(c.join_invite("Docs", &code), Err(coffer_core::Error::Server(410, _))));
+    assert_eq!(a.invites(&id).unwrap()[0].state, "used");
+}

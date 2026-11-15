@@ -5,6 +5,7 @@ pub mod harden;
 pub mod header;
 pub mod hexutil;
 pub mod http;
+pub mod invite;
 pub mod manager;
 pub mod model;
 pub mod proto;

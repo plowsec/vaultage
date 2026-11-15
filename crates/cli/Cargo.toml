@@ -12,3 +12,4 @@ coffer-core = { path = "../core" }
 serde_json.workspace = true
 libc.workspace = true
 zeroize.workspace = true
+qrcodegen = "1.8"

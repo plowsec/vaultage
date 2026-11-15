@@ -6,11 +6,14 @@
 
 pub mod fs;
 pub mod gcs;
+pub mod invites;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use coffer_core::proto::{PruneResp, UsageResp};
 use serde::{Deserialize, Serialize};
+
+use invites::{InviteOut, InviteRec};
 
 pub type Id16 = [u8; 16];
 pub type Cid = [u8; 32];
@@ -26,6 +29,9 @@ pub enum SErr {
     Bad(String),
     Quota,
     NoChunk,
+    NoInvite,
+    /// Invite used, expired or revoked (410).
+    Gone(String),
     /// Transient backend failure: client should retry (503).
     Unavailable(String),
     Internal(String),
@@ -67,6 +73,11 @@ pub trait Store: Send + Sync {
     /// Items must be validated (ids) by the caller.
     fn prune(&self, vid: &Id16, key: &[u8; 32], items: &[(Id16, u64)]) -> R<PruneResp>;
     fn usage(&self, vid: &Id16, key: &[u8; 32]) -> R<UsageResp>;
+    /// Read-modify-write the vault's invites atomically (written only if `f` changed them).
+    /// `key`: the vault key a member's request was signed with, re-checked like other signed
+    /// operations; None for a claim, whose signature `f` checks against the invite's own key.
+    /// `f` may run more than once (contention) and must depend only on its input.
+    fn edit_invites(&self, vid: &Id16, key: Option<&[u8; 32]>, f: &mut dyn FnMut(&mut Vec<InviteRec>) -> R<InviteOut>) -> R<InviteOut>;
 }
 
 pub fn hex(b: &[u8]) -> String {
@@ -110,6 +121,9 @@ pub struct Meta {
     /// Unique per create: tells our own create (reply lost) from someone else's.
     #[serde(default)]
     pub create_id: String,
+    /// One-time invites, including tombstones. Kept on header writes, dropped on rekey.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub invites: Vec<InviteRec>,
 }
 
 #[derive(Clone)]
@@ -127,6 +141,7 @@ impl Meta {
             auth_pub: hex(auth_pub),
             created_ms,
             header: String::from_utf8(header.to_vec()).map_err(|_| SErr::Bad("header not utf-8".into()))?,
+            invites: vec![],
         })
     }
 

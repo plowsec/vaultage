@@ -32,7 +32,8 @@ coffer — encrypted vaults
   coffer <vault> empty-trash          erase trashed files for good, everywhere
   coffer <vault> prune <path>         keep only the current version of a file
   coffer <vault> connect --server URL --token T|--token-file F     local vault -> synced
-  coffer <vault> invite [label]       print an invite (full access) for another person/device
+  coffer <vault> invite [label] [--qr] [--hours N]   one-time invite (full access), default 24 h
+  coffer <vault> invites [revoke ID]  list invites (waiting/used/expired/revoked); revoke a waiting one
   coffer <vault> rotate [--passphrase]   new keys; every other device, passphrase, invite is out
   coffer <vault> adopt                after a rotation elsewhere: enter the NEW secret
 
@@ -144,6 +145,40 @@ fn human(n: u64) -> String {
     if u == 0 { format!("{n} B") } else { format!("{v:.1} {}", units[u]) }
 }
 
+/// "in 3 h" / "5 min ago".
+fn rel(t: i64, now: i64) -> String {
+    let d = (t - now).abs() / 60_000;
+    let s = match d {
+        0 => return "now".into(),
+        1..=89 => format!("{d} min"),
+        90..=2879 => format!("{} h", (d + 30) / 60),
+        _ => format!("{} d", (d + 720) / 1440),
+    };
+    if t > now { format!("in {s}") } else { format!("{s} ago") }
+}
+
+/// QR code for a terminal: two rows per line (half blocks), explicit black on white so it scans
+/// on dark and light themes alike.
+fn qr_text(text: &str) -> String {
+    use qrcodegen::{QrCode, QrCodeEcc};
+    let q = QrCode::encode_text(text, QrCodeEcc::Medium).unwrap_or_else(|_| die("invite too long for a QR code"));
+    let (n, quiet) = (q.size(), 2);
+    let dark = |x: i32, y: i32| (0..n).contains(&x) && (0..n).contains(&y) && q.get_module(x, y);
+    let mut out = String::new();
+    let mut y = -quiet;
+    while y < n + quiet {
+        for x in -quiet..n + quiet {
+            // Foreground paints the top half, background the bottom half.
+            let fg = if dark(x, y) { 30 } else { 97 };
+            let bg = if dark(x, y + 1) { 40 } else { 107 };
+            out.push_str(&format!("\x1b[{fg};{bg}m▀"));
+        }
+        out.push_str("\x1b[0m\n");
+        y += 2;
+    }
+    out
+}
+
 fn find_vault(m: &Manager, key: &str) -> String {
     let all = m.list();
     let hits: Vec<_> = all.iter().filter(|v| v.name == key || v.id.starts_with(key)).collect();
@@ -220,9 +255,16 @@ fn run() -> Result<()> {
                 let mut code = std::env::var("COFFER_INVITE").map(String::into_bytes).unwrap_or_else(|_| prompt_secret("Invite"));
                 let res = m.join_invite(&name, std::str::from_utf8(&code).unwrap_or(""));
                 code.zeroize();
-                let id = res?;
+                let (id, recovery_key) = res?;
                 sync_and_report(&*m.get(&id)?);
-                println!("joined {id}\nAdd your own passphrase now: coffer {name} passwd   (unlock with the invite key via COFFER_RECOVERY_KEY)");
+                println!("joined {id}");
+                match recovery_key {
+                    Some(k) => {
+                        println!("recovery key: {k}");
+                        eprintln!("\nThe invite is used up. Write this recovery key down: it is your way in (COFFER_RECOVERY_KEY).\nAdd a passphrase too: coffer {name} passwd");
+                    }
+                    None => eprintln!("Old-style invite: it keeps working until removed. Add your own passphrase now: coffer {name} passwd\n(unlock with the invite key via COFFER_RECOVERY_KEY)"),
+                }
                 return Ok(());
             }
             let server = args.opt("--server").unwrap_or_else(|| die("--server URL required"));
@@ -405,9 +447,37 @@ fn run() -> Result<()> {
             changed = true;
         }
         "invite" => {
+            let qr = args.flag("--qr");
+            let hours = args.opt("--hours").map(|h| h.parse::<i64>().ok().filter(|h| (1..=168).contains(h)).unwrap_or_else(|| die("--hours must be 1..168")));
             let label = args.next().unwrap_or_default();
-            println!("{}", m.invite(&id, &label)?);
-            eprintln!("\nAnyone with this line has full access to the vault. Send it over a channel you trust.\nTo revoke: coffer {first} rotate");
+            let mut code = m.invite(&id, &label, hours.map(|h| h * 3600 * 1000))?;
+            if qr {
+                eprint!("{}", qr_text(&code));
+            }
+            println!("{code}");
+            code.zeroize();
+            eprintln!("\nWorks once, for {} h. Whoever uses it first gets full access to the vault.\nSee or revoke: coffer {first} invites. To cut off someone who joined: coffer {first} rotate", hours.unwrap_or(24));
+        }
+        "invites" => {
+            let list = m.invites(&id)?;
+            if args.next().as_deref() == Some("revoke") {
+                let p = args.need("invite id").to_lowercase();
+                let hits: Vec<_> = list.iter().filter(|i| i.id.starts_with(&p)).collect();
+                let [one] = hits[..] else { die(format!("{} invites match '{p}'", hits.len())) };
+                m.revoke_invite(&id, &one.id)?;
+                println!("revoked {}", &one.id[..8]);
+                return Ok(());
+            }
+            let now = coffer_core::model::now_ms();
+            for i in list {
+                let when = match i.state.as_str() {
+                    "waiting" => format!("expires {}", rel(i.expires, now)),
+                    "used" => format!("used {}", rel(i.claimed.unwrap_or(0), now)),
+                    "revoked" => format!("revoked {}", rel(i.revoked.unwrap_or(0), now)),
+                    _ => format!("expired {}", rel(i.expires, now)),
+                };
+                println!("{}  {:<8} {:<18} {}", &i.id[..8], i.state, when, i.label);
+            }
         }
         "rotate" => {
             let mut pass = args.flag("--passphrase").then(|| new_passphrase(false));
