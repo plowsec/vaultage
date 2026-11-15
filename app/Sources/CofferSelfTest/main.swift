@@ -360,6 +360,19 @@ func server(url: String, token: String) async throws {
     try FileManager.default.createDirectory(atPath: home2, withIntermediateDirectories: true)
     let joined = try child(["--child-join"], home: home2, input: inv.code + "\n")
     check(joined.contains("JOINED \(id) 2"), "join_invite on a second device sees both files (\(joined.trimmingCharacters(in: .whitespacesAndNewlines)))")
+    let joinerKey = joined.components(separatedBy: " KEY ").last?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    check(joinerKey.count > 40, "join_invite returns the joiner's own recovery key")
+    let home3 = URL(fileURLWithPath: home).appendingPathComponent("device3", isDirectory: true).path
+    try FileManager.default.createDirectory(atPath: home3, withIntermediateDirectories: true)
+    let again = try child(["--child-join"], home: home3, input: inv.code + "\n")
+    check(again.contains("GONE used"), "invite works once: a second join is refused as used (\(again.trimmingCharacters(in: .whitespacesAndNewlines)))")
+    let invs: [InviteStatus] = try await core.call(["op": "invites", "id": id])
+    check(invs.count == 1 && invs[0].state == "used" && invs[0].label == "Second Mac", "invites: listed as used, label readable")
+    let inv2: CodeResult = try await core.call(["op": "invite", "id": id, "label": "Never sent"])
+    let open: [InviteStatus] = try await core.call(["op": "invites", "id": id])
+    if let w = open.first(where: \.isWaiting) { try await core.perform(["op": "revoke_invite", "id": id, "invite": w.id]) }
+    let revoked = try child(["--child-join"], home: home3, input: inv2.code + "\n")
+    check(revoked.contains("GONE revoked"), "revoked invite is refused (\(revoked.trimmingCharacters(in: .whitespacesAndNewlines)))")
 
     // Rotate here; the second device must adopt the new key.
     var r: RecoveryKeyResult = try await core.call(["op": "rotate_prepare", "id": id], secret: SecretBytes(count: 0))
@@ -378,7 +391,7 @@ func server(url: String, token: String) async throws {
     let _: ImportReport = try await core.call(["op": "import", "id": id, "sources": [try write("three.txt", "after rotation", in: "att3")], "dest": ""])
     let st2 = try await waitStatus(id) { $0.sync.state == "idle" && $0.summary.pending == 0 }
     check(st2.sync.state == "idle", "sync continues after rotation")
-    let adopted = try child(["--child-adopt", id], home: home2, input: String(parts.count == 3 ? parts[2] : "") + "\n" + r.recoveryKey + "\n")
+    let adopted = try child(["--child-adopt", id], home: home2, input: joinerKey + "\n" + r.recoveryKey + "\n")
     check(adopted.hasPrefix("REKEYED"), "second device sees state rekeyed (\(adopted.split(separator: "\n").first ?? ""))")
     check(adopted.contains("ADOPTED 3"), "adopt_rekey: second device syncs again and sees the new file")
 
@@ -401,10 +414,16 @@ func server(url: String, token: String) async throws {
 /// Second-device side of the server checks.
 func childJoin() async throws {
     guard let code = readLine() else { return }
-    let r: IDResult = try await core.call(["op": "join_invite", "name": "Joined"], secret: SecretBytes(utf8: code))
+    let r: JoinInviteResult
+    do {
+        r = try await core.call(["op": "join_invite", "name": "Joined"], secret: SecretBytes(utf8: code))
+    } catch let e as CofferError where e.inviteGone != nil {
+        print("GONE \(e.inviteGone!)")
+        return
+    }
     let st = try await waitStatus(r.id) { $0.sync.state == "idle" && $0.sync.lastOkMs > 0 }
     let l: ListResult = try await core.call(["op": "list", "id": r.id, "path": ""])
-    print("JOINED \(r.id) \(l.items.count) \(st.sync.state)")
+    print("JOINED \(r.id) \(l.items.count) \(st.sync.state) KEY \(r.recoveryKey ?? "")")
     try await core.perform(["op": "lock_all"])
 }
 

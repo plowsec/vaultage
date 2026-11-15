@@ -1,5 +1,6 @@
 import AppKit
 import CofferKit
+import CoreImage.CIFilterBuiltins
 import SwiftUI
 
 /// Vault-level flows opened from Vault Settings, the menu bar or a banner.
@@ -420,13 +421,13 @@ struct InviteSheet: View {
                     TextField("For", text: $label, prompt: Text("e.g. Alex, or Work MacBook"))
                         .onSubmit { if !working { Task { await create() } } }
                 } footer: {
-                    Text("The name appears in Unlock Methods so you can remove the invite later. The invite gives full read and write access.")
+                    Text("The name appears under Sharing, where you can see whether the invite was used and revoke it. The invite works once, for 24 hours, and gives full read and write access.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if working {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
-                        Text("Creating the invite and syncing it to the server…").foregroundStyle(.secondary)
+                        Text("Creating the invite on the server…").foregroundStyle(.secondary)
                     }
                 }
             }
@@ -449,6 +450,19 @@ struct InviteSheet: View {
         VStack(spacing: 0) {
             SheetHeader(icon: "person.badge.key", title: "Invite Ready", subtitle: label.isEmpty ? "For “\(name)”" : "For \(label.trimmingCharacters(in: .whitespaces))")
             VStack(alignment: .leading, spacing: 14) {
+                if let qr = InviteQRCode.image(for: code) {
+                    Image(nsImage: qr)
+                        .interpolation(.none)
+                        .resizable()
+                        .frame(width: 220, height: 220)
+                        .padding(10)
+                        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.white))
+                        .frame(maxWidth: .infinity)
+                        .accessibilityLabel("Invite QR code")
+                    Text("On the iPhone: Join Existing Vault → Invite → Scan QR Code.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                }
                 Text(code)
                     .font(.callout.monospaced())
                     .textSelection(.enabled)
@@ -467,7 +481,7 @@ struct InviteSheet: View {
                     Spacer()
                 }
                 Label {
-                    Text("Anyone with this line can open “\(name)” and read, change or delete every file. Send it over a channel you trust, such as in person or an end-to-end-encrypted messenger. On their device: Join Existing Vault → I have an invite.\n\nTo stop it from working, remove it in Vault Settings → Unlock Methods. That doesn’t cut off someone who already joined: rotate the vault’s keys for that.")
+                    Text("Works once, within 24 hours. Whoever uses it first can open “\(name)” and read, change or delete every file. Scanning the code keeps it off chats and clipboards; otherwise send it over a channel you trust. On their device: Join Existing Vault → I have an invite.\n\nOnce used, the line opens nothing. If your recipient is told it was already used, someone else got it first: rotate the vault’s keys. Revoke an unused invite in Vault Settings → Sharing.")
                         .fixedSize(horizontal: false, vertical: true)
                 } icon: {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
@@ -499,6 +513,19 @@ struct InviteSheet: View {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+}
+
+/// Crisp QR code: generated at module size 1, scaled by an integer factor, drawn without smoothing.
+enum InviteQRCode {
+    static func image(for text: String) -> NSImage? {
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = Data(text.utf8)
+        filter.correctionLevel = "M"
+        guard let output = filter.outputImage else { return nil }
+        let scaled = output.transformed(by: CGAffineTransform(scaleX: 10, y: 10))
+        guard let cg = CIContext().createCGImage(scaled, from: scaled.extent) else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: scaled.extent.width, height: scaled.extent.height))
     }
 }
 

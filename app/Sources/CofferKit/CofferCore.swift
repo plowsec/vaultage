@@ -15,6 +15,24 @@ public struct CofferError: LocalizedError, Equatable, Sendable {
     /// Tampering or corruption. Never auto-dismiss these.
     public var isIntegrity: Bool { code == "integrity" }
     public var isWrongSecret: Bool { code == "crypto" }
+    /// One-time invite that can't be claimed: "used", "expired" or "revoked"; nil otherwise.
+    public var inviteGone: String? {
+        guard code == "server", Self.serverStatus(message) == 410 else { return nil }
+        for w in ["used", "expired", "revoked"] where message.contains(w) { return w }
+        return "used"
+    }
+
+    /// Text for a failed invite join.
+    public var inviteProblem: String? {
+        switch inviteGone {
+        case "expired": return "This invite has expired. Ask for a new one."
+        case "revoked": return "This invite was revoked by the person who sent it. Ask for a new one."
+        case "used": return "This invite was already used. If it wasn’t you, someone else has it: tell the person who sent it to rotate the vault’s keys."
+        default:
+            if code == "not_found" { return "The server doesn’t know this invite. It may never have been created there, or the vault’s keys were rotated." }
+            return nil
+        }
+    }
 
     public var errorDescription: String? {
         var m = message

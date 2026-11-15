@@ -176,6 +176,25 @@ public struct DeletedResult: Decodable, Sendable { public let deleted: Int }
 public struct PurgedResult: Decodable, Sendable { public let purged: Int }
 public struct RecoveryKeyResult: Decodable, Sendable { public let recoveryKey: String }
 public struct CodeResult: Decodable, Sendable { public let code: String }
+/// `join_invite`: `recoveryKey` is this member's own (one-time invite); nil for an old-style invite.
+public struct JoinInviteResult: Decodable, Sendable {
+    public let id: String
+    public let recoveryKey: String?
+}
+
+/// A one-time invite as the vault's members see it (`invites`).
+public struct InviteStatus: Decodable, Identifiable, Hashable, Sendable {
+    public let id: String
+    public let label: String
+    public let created: Int64
+    public let expires: Int64
+    public let claimed: Int64?
+    public let revoked: Int64?
+    /// waiting | used | expired | revoked
+    public let state: String
+
+    public var isWaiting: Bool { state == "waiting" }
+}
 
 public struct UsageInfo: Decodable, Hashable, Sendable {
     /// Stored chunk bytes on the server.

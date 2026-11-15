@@ -19,6 +19,8 @@ struct JoinVaultSheet: View {
     @State private var error: String?
     @State private var joinedID: String?
     @State private var viaInvite = false
+    /// One-time invite: this member's own recovery key, shown before anything else.
+    @State private var joinedKey: String?
 
     /// Shape check only: "<server>#<32 hex vault id>#<key>".
     private var inviteProblem: String? {
@@ -42,9 +44,16 @@ struct JoinVaultSheet: View {
     }
 
     var body: some View {
-        if let joinedID {
+        if let joinedID, let key = joinedKey {
+            RecoveryKeyView(vaultName: name.isEmpty ? "Vault" : name, recoveryKey: key, hasOtherUnlock: false, note: nil,
+                            subtitle: "You joined “\(name.isEmpty ? "Vault" : name)”.",
+                            message: "The invite is used up and opens nothing now. This recovery key is your own way into the vault, on this Mac or another device. Coffer doesn’t keep a copy.",
+                            doneTitle: "Continue") {
+                withAnimation(.snappy) { joinedKey = nil }
+            }
+        } else if let joinedID {
             EnableTouchIDPrompt(vaultID: joinedID, title: "Vault Added", subtitle: "“\(name.isEmpty ? "Vault" : name)” is now on this Mac and syncing.",
-                                note: viaInvite ? "Add your own passphrase in Vault Settings → Unlock Methods. The invite can be removed later; your own passphrase keeps working." : nil) {
+                                note: viaInvite ? "Add a passphrase in Vault Settings → Unlock Methods if you’d rather not type the recovery key." : nil) {
                 dismiss()
                 Task { await app.didAddVault(joinedID) }
             }
@@ -89,7 +98,7 @@ struct JoinVaultSheet: View {
                 if !invite.isEmpty, let p = inviteProblem { Text(p).font(.caption).foregroundStyle(.red) }
                 TextField("Name on this Mac", text: $name, prompt: Text("e.g. Family"))
             } footer: {
-                Text("The invite is the one-line code the vault’s owner sent you. It gives this Mac full access to the vault.")
+                Text("The one-line code the vault’s owner sent you. It works once and gives this Mac full access to the vault.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -138,12 +147,17 @@ struct JoinVaultSheet: View {
             invite = ""
             defer { s.wipe() }
             do {
-                let r: IDResult = try await app.core.call(["op": "join_invite", "name": name.trimmingCharacters(in: .whitespaces)], secret: s)
+                let r: JoinInviteResult = try await app.core.call(["op": "join_invite", "name": name.trimmingCharacters(in: .whitespaces)], secret: s)
                 await app.refreshVaults()
                 viaInvite = true
-                withAnimation(.snappy) { joinedID = r.id }
+                withAnimation(.snappy) {
+                    joinedKey = r.recoveryKey
+                    joinedID = r.id
+                }
             } catch let e as CofferError where e.isWrongSecret {
                 error = "That invite doesn’t open the vault. It may have been removed, or the keys were rotated."
+            } catch let e as CofferError where e.inviteProblem != nil {
+                error = e.inviteProblem
             } catch {
                 self.error = error.localizedDescription
             }
@@ -254,6 +268,7 @@ struct VaultSettingsSheet: View {
     @State private var working = false
     @State private var error: String?
     @State private var task: VaultTask?
+    @State private var invites: [InviteStatus] = []
 
     private var vault: VaultInfo? { app.vault(vaultID) }
     private var session: VaultSession? { app.sessions[vaultID] }
@@ -296,7 +311,11 @@ struct VaultSettingsSheet: View {
         }
         .frame(width: 580, height: 660)
         .onAppear { name = vault?.name ?? "" }
-        .task(id: vault?.synced) { await session?.refreshUsage() }
+        .task(id: vault?.synced) {
+            await session?.refreshUsage()
+            await loadInvites()
+        }
+        .onChange(of: task) { _, t in if t == nil { Task { await loadInvites() } } }
         .sheet(item: $task) { t in
             VaultTaskSheet(vaultID: vaultID, task: t)
                 .environment(app)
@@ -389,12 +408,61 @@ struct VaultSettingsSheet: View {
                 Button("Invite Someone…") { task = .invite }
                     .disabled(!v.unlocked || session?.status?.isRekeyed == true)
             }
+            ForEach(invites) { i in
+                HStack {
+                    Image(systemName: inviteSymbol(i))
+                        .foregroundStyle(i.state == "used" ? AnyShapeStyle(.green) : (i.isWaiting ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary)))
+                        .frame(width: 20)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(i.label.isEmpty ? "Invite" : i.label)
+                        Text(inviteLine(i)).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if i.isWaiting {
+                        Button("Revoke") { Task { await revoke(i) } }
+                    }
+                }
+            }
         } header: {
             Text("Sharing")
         } footer: {
-            Text("Invites appear under Unlock Methods. Removing one stops new joins; to cut off someone who already joined, rotate keys.")
+            Text("An invite works once, within 24 hours. A used, expired or revoked invite opens nothing. To cut off someone who already joined, rotate keys.")
                 .font(.caption).foregroundStyle(.secondary)
         }
+    }
+
+    private func inviteSymbol(_ i: InviteStatus) -> String {
+        switch i.state {
+        case "waiting": return "clock"
+        case "used": return "checkmark.circle"
+        default: return "xmark.circle"
+        }
+    }
+
+    private func inviteLine(_ i: InviteStatus) -> String {
+        switch i.state {
+        case "waiting": return "Not used yet · expires \(Fmt.date(i.expires))"
+        case "used": return "Used \(Fmt.date(i.claimed ?? i.created))"
+        case "revoked": return "Revoked \(Fmt.date(i.revoked ?? i.created))"
+        default: return "Expired unused \(Fmt.date(i.expires))"
+        }
+    }
+
+    private func loadInvites() async {
+        guard let v = vault, v.synced, v.unlocked else { invites = []; return }
+        invites = (try? await app.core.call(["op": "invites", "id": vaultID]) as [InviteStatus]) ?? []
+    }
+
+    private func revoke(_ i: InviteStatus) async {
+        let ok = await Alerts.confirm("Revoke the invite “\(i.label.isEmpty ? "Invite" : i.label)”?", "Nobody can join with it any more.", action: "Revoke")
+        guard ok else { return }
+        do {
+            let _: Nothing = try await app.core.call(["op": "revoke_invite", "id": vaultID, "invite": i.id])
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+        await loadInvites()
     }
 
     @ViewBuilder
