@@ -264,7 +264,7 @@ final class AppModel {
         guard let v = vault(id) else { return }
         let ok = await Alerts.confirm(
             "Remove “\(v.name)” from this Mac?",
-            "The vault is locked and removed from Coffer’s list. Its encrypted folder stays on disk until you move it to the Trash." + (v.synced ? " The copy on the sync server is not affected." : " This is a local vault: without its folder, the files are gone."),
+            "The vault is locked and removed from Vaultage’s list. Its encrypted folder stays on disk until you move it to the Trash." + (v.synced ? " The copy on the sync server is not affected." : " This is a local vault: without its folder, the files are gone."),
             action: "Remove")
         guard ok else { return }
         await ExternalEditor.shared.stopAll(vaultID: id)

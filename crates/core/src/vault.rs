@@ -387,7 +387,7 @@ fn lock_dir(dir: &Path) -> Result<File> {
     {
         use std::os::unix::io::AsRawFd;
         if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            return Err(Error::Invalid("vault is open in another Coffer process".into()));
+            return Err(Error::Invalid("vault is open in another Vaultage process".into()));
         }
     }
     Ok(f)

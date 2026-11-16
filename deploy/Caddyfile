@@ -7,8 +7,8 @@
 	}
 }
 
-# No access log here: cofferd logs each request, and Caddy would log the X-Coffer-Enroll header.
-{$COFFER_DOMAIN} {
+# No access log here: vaultaged logs each request, and Caddy would log the X-Coffer-Enroll header.
+{$VAULTAGE_DOMAIN} {
 	header {
 		Strict-Transport-Security "max-age=63072000; includeSubDomains"
 		X-Content-Type-Options nosniff
@@ -18,5 +18,5 @@
 	request_body {
 		max_size 33MiB
 	}
-	reverse_proxy {$COFFER_UPSTREAM:cofferd:8787}
+	reverse_proxy {$VAULTAGE_UPSTREAM:vaultaged:8787}
 }

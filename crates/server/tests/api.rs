@@ -7,8 +7,8 @@ use std::net::TcpStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use coffer_core::hexutil;
-use coffer_core::proto::{sign_request, ENROLL_HEADER, MAX_CHUNK_BODY};
+use vaultage_core::hexutil;
+use vaultage_core::proto::{sign_request, ENROLL_HEADER, MAX_CHUNK_BODY};
 use common::*;
 use ed25519_dalek::SigningKey;
 use serde_json::json;

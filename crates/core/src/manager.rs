@@ -242,14 +242,24 @@ pub struct Manager {
 }
 
 pub fn default_home() -> PathBuf {
-    if let Some(h) = std::env::var_os("COFFER_HOME") {
+    if let Some(h) = crate::env_var_os("HOME") {
         return PathBuf::from(h);
     }
     let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
-    if cfg!(target_os = "macos") {
-        home.join("Library/Application Support/Coffer")
+    let (base, new, old) = if cfg!(target_os = "macos") {
+        (home.join("Library/Application Support"), "Vaultage", "Coffer")
     } else {
-        std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share")).join("coffer")
+        (std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share")), "vaultage", "coffer")
+    };
+    pick_home(&base, new, old)
+}
+
+/// Installs from before the rename keep using their data folder; nothing is moved.
+fn pick_home(base: &Path, new: &str, old: &str) -> PathBuf {
+    if !base.join(new).exists() && base.join(old).exists() {
+        base.join(old)
+    } else {
+        base.join(new)
     }
 }
 
@@ -300,7 +310,7 @@ impl Manager {
         }
         let fresh = registry.device.is_none() || moved;
         // Phones have no useful hostname; the app names the device.
-        let device_name = std::env::var("COFFER_DEVICE_NAME").ok().filter(|n| !n.trim().is_empty()).unwrap_or_else(hostname);
+        let device_name = crate::env_var("DEVICE_NAME").filter(|n| !n.trim().is_empty()).unwrap_or_else(hostname);
         registry.device.get_or_insert_with(|| Device::new(device_name.trim()));
         let trust: BTreeMap<String, String> = match fs::read(home.join("trust.json")) {
             Ok(b) => serde_json::from_slice(&b)?,
@@ -421,7 +431,7 @@ impl Manager {
         let mut thread = ov.thread.lock().unwrap();
         if self.background_sync && synced && thread.is_none() {
             let t = ov.clone();
-            *thread = Some(std::thread::Builder::new().name("coffer-sync".into()).spawn(move || t.sync_loop())?);
+            *thread = Some(std::thread::Builder::new().name("vaultage-sync".into()).spawn(move || t.sync_loop())?);
         }
         drop(thread);
         ov.wake();
@@ -984,6 +994,23 @@ impl Manager {
 impl Drop for Manager {
     fn drop(&mut self) {
         self.lock_all();
+    }
+}
+
+#[cfg(test)]
+mod home_tests {
+    use super::pick_home;
+
+    #[test]
+    fn old_folder_kept_until_a_new_one_exists() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let base = std::env::temp_dir().join(format!("vaultage-home-test-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        assert_eq!(pick_home(&base, "Vaultage", "Coffer"), base.join("Vaultage"));
+        std::fs::create_dir(base.join("Coffer")).unwrap();
+        assert_eq!(pick_home(&base, "Vaultage", "Coffer"), base.join("Coffer"));
+        std::fs::create_dir(base.join("Vaultage")).unwrap();
+        assert_eq!(pick_home(&base, "Vaultage", "Coffer"), base.join("Vaultage"));
     }
 }
 

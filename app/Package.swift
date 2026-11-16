@@ -1,15 +1,15 @@
 // swift-tools-version: 5.10
 import PackageDescription
 
-// Static library produced by `cargo build --release --locked -p coffer-ffi`.
+// Static library produced by `cargo build --release --locked -p vaultage-ffi`.
 let rustLib = Context.packageDirectory + "/../target/release"
 
 let package = Package(
-    name: "Coffer",
+    name: "Vaultage",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "Coffer", targets: ["Coffer"]),
-        .executable(name: "coffer-selftest", targets: ["CofferSelfTest"]),
+        .executable(name: "Vaultage", targets: ["Coffer"]),
+        .executable(name: "vaultage-selftest", targets: ["CofferSelfTest"]),
     ],
     targets: [
         .target(name: "CCoffer", path: "Sources/CCoffer"),
@@ -19,7 +19,7 @@ let package = Package(
             path: "Sources/CofferKit",
             linkerSettings: [
                 .unsafeFlags(["-L", rustLib]),
-                .linkedLibrary("coffer_ffi"),
+                .linkedLibrary("vaultage_ffi"),
                 .linkedFramework("Security"),
                 .linkedFramework("CoreFoundation"),
             ]

@@ -25,7 +25,7 @@ use std::io;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use coffer_core::proto::{PruneResp, UsageResp};
+use vaultage_core::proto::{PruneResp, UsageResp};
 
 use super::*;
 use crate::GcsConfig;
@@ -754,7 +754,7 @@ impl GcsStore {
                 .get("e")
                 .and_then(|e| {
                     is_hex(e, 32)
-                        .then(|| coffer_core::hexutil::decode_array::<16>(e))
+                        .then(|| vaultage_core::hexutil::decode_array::<16>(e))
                         .flatten()
                 })
                 .ok_or_else(|| corrupt("no entry metadata"))?;
@@ -1139,7 +1139,7 @@ impl Store for GcsStore {
             .filter_map(|o| {
                 let h = o.name.strip_prefix(&pfx)?;
                 let cid = is_hex(h, 64)
-                    .then(|| coffer_core::hexutil::decode_array::<32>(h))
+                    .then(|| vaultage_core::hexutil::decode_array::<32>(h))
                     .flatten()?;
                 (!live.contains(&cid) && now - o.updated_ms >= grace).then_some((cid, o))
             })

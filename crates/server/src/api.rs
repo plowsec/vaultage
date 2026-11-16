@@ -13,8 +13,8 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use coffer_core::hexutil;
-use coffer_core::proto::{
+use vaultage_core::hexutil;
+use vaultage_core::proto::{
     verify_request, CommitReq, CommitResp, ConflictResp, CreateVaultReq, ErrorResp, InviteClaimReq, InviteClaimResp,
     InviteCreateReq, InvitesResp, LogResp, MissingReq, MissingResp, PruneReq, RekeyReq, WireRecord, ENROLL_HEADER,
     MAX_CHUNK_BODY, MAX_JSON_BODY,
@@ -50,7 +50,7 @@ fn too_many(retry_after: u64) -> Response {
 }
 
 fn internal(ctx: &str, e: impl std::fmt::Display) -> Response {
-    eprintln!("cofferd: {ctx}: {e}");
+    eprintln!("vaultaged: {ctx}: {e}");
     err(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
 }
 
@@ -78,7 +78,7 @@ fn serr(e: SErr) -> Response {
         SErr::NoInvite => err(StatusCode::NOT_FOUND, "no such invite"),
         SErr::Gone(m) => err(StatusCode::GONE, &m),
         SErr::Unavailable(m) => {
-            eprintln!("cofferd: storage unavailable: {m}");
+            eprintln!("vaultaged: storage unavailable: {m}");
             let mut r = err(StatusCode::SERVICE_UNAVAILABLE, "storage temporarily unavailable");
             r.headers_mut().insert(header::RETRY_AFTER, 1u64.into());
             r
@@ -236,7 +236,7 @@ async fn signed_op<T: IntoResponse>(
         };
         // A member is here: erase invite payloads past their time (best effort).
         if let Err(SErr::Unavailable(m) | SErr::Internal(m)) = app.store.sweep_invites(&vid) {
-            eprintln!("cofferd: invite sweep: {m}");
+            eprintln!("vaultaged: invite sweep: {m}");
         }
         match op(&*app.store, &vid, &key, &body) {
             Ok(r) => r.into_response(),

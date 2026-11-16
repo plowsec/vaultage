@@ -4,11 +4,11 @@
 use std::fs;
 use std::path::Path;
 
-use coffer_core::crypto::KdfParams;
-use coffer_core::header::SlotKind;
-use coffer_core::manager::Manager;
-use coffer_core::Error;
-use coffer_server::{spawn, Config, ServerHandle};
+use vaultage_core::crypto::KdfParams;
+use vaultage_core::header::SlotKind;
+use vaultage_core::manager::Manager;
+use vaultage_core::Error;
+use vaultage_server::{spawn, Config, ServerHandle};
 use serde_json::Value;
 
 const TOKEN: &str = "enroll-token-for-tests";
@@ -284,10 +284,10 @@ fn invites_work_once_and_slot_changes_travel() {
     assert_eq!(states, ["expired", "revoked", "used"]);
 
     // Old-style invite (a recovery slot in the header) still joins, and keeps working.
-    let old_key = coffer_core::crypto::random::<32>();
+    let old_key = vaultage_core::crypto::random::<32>();
     a.get(&id).unwrap().v().edit_header(|h, vmk| h.add_slot(vmk, SlotKind::Recovery, "Invite: Old", &old_key, None, Value::Null)).unwrap();
     sync(&a, &id);
-    let old_line = format!("{url}#{id}#{}", coffer_core::crypto::recovery_encode(&old_key));
+    let old_line = format!("{url}#{id}#{}", vaultage_core::crypto::recovery_encode(&old_key));
     let oldie = Manager::new(tmp.path().join("homeOld"), false).unwrap();
     assert_eq!(oldie.join_invite("Shared", &old_line).unwrap(), (id.clone(), None));
 
@@ -305,14 +305,14 @@ fn invites_work_once_and_slot_changes_travel() {
 
 #[test]
 fn fuzz_with_purges_over_http() {
-    use coffer_core::http::{create_vault, HttpRemote};
-    use coffer_core::remote::Remote;
+    use vaultage_core::http::{create_vault, HttpRemote};
+    use vaultage_core::remote::Remote;
     use std::sync::atomic::{AtomicBool, Ordering};
     for seed in 301..=304 {
         let data = tempfile::tempdir().unwrap();
         let (_h, url) = server(data.path());
         let registered = AtomicBool::new(false);
-        coffer_core::testkit::fuzz_opts(seed, 3, 100, true, &|v: &coffer_core::vault::Vault| {
+        vaultage_core::testkit::fuzz_opts(seed, 3, 100, true, &|v: &vaultage_core::vault::Vault| {
             if !registered.swap(true, Ordering::SeqCst) {
                 create_vault(&url, TOKEN, &v.keys(), &v.portable_header()).unwrap();
             }
@@ -369,7 +369,7 @@ fn invite_payload_is_erased_and_junk_claims_block_nobody() {
 
 #[test]
 fn a_join_that_fails_does_not_burn_the_invite() {
-    use coffer_core::invite::{parse_line, InviteKeys};
+    use vaultage_core::invite::{parse_line, InviteKeys};
     let tmp = tempfile::tempdir().unwrap();
     let (_h, url) = server(&tmp.path().join("server"));
     let a = Manager::new(tmp.path().join("homeA"), false).unwrap();
@@ -392,9 +392,9 @@ fn a_join_that_fails_does_not_burn_the_invite() {
     // The claim lands but the join does not finish (crash, full disk): simulated by claiming with
     // the nonce the failed attempt saved. The same device can still join; nobody else can.
     let claims: Value = serde_json::from_slice(&fs::read(home.join("claims.json")).unwrap()).unwrap();
-    let ik = InviteKeys::from_secret(&coffer_core::crypto::recovery_decode(&parse_line(&line).unwrap().secret).unwrap());
+    let ik = InviteKeys::from_secret(&vaultage_core::crypto::recovery_decode(&parse_line(&line).unwrap().secret).unwrap());
     let nonce = claims[&ik.id]["nonce"].as_str().unwrap().to_string();
-    coffer_core::http::claim_invite(&url, &id, &ik, &nonce).unwrap();
+    vaultage_core::http::claim_invite(&url, &id, &ik, &nonce).unwrap();
     assert_eq!(state(), "used");
     gone(snoop.join_invite("X", &line), "used");
     fs::remove_file(&junk).unwrap();

@@ -46,8 +46,8 @@ VMK (random 256-bit, per vault, per key epoch)
 ## Key rotation (revoking a device, a person, a leaked passphrase)
 
 ```sh
-coffer Work rotate --passphrase     # app: Vault Settings → Rotate Keys…
-coffer Work adopt                   # on every device that stays, with the NEW secret
+vaultage Work rotate --passphrase     # app: Vault Settings → Rotate Keys…
+vaultage Work adopt                   # on every device that stays, with the NEW secret
 ```
 
 | Step | Effect |
@@ -63,7 +63,7 @@ coffer Work adopt                   # on every device that stays, with the NEW s
 
 ## Sharing
 
-`coffer Work invite Sam [--qr] [--hours N]` / Vault Settings → Invite Someone… prints `server#vault-id#secret`. Full read/write access for whoever uses it first.
+`vaultage Work invite Sam [--qr] [--hours N]` / Vault Settings → Invite Someone… prints `server#vault-id#secret`. Full read/write access for whoever uses it first.
 
 | Property | How |
 |---|---|
@@ -73,7 +73,7 @@ coffer Work adopt                   # on every device that stays, with the NEW s
 | Leaked line before use | the thief joins; your recipient then gets "already used" → rotate keys |
 | Lost reply, or a join that fails after the claim | this device keeps its claim nonce (`claims.json`) and may fetch the payload again for 10 min; nobody else. Local checks and the header fetch run before the claim |
 | Junk claims | bad signatures and unknown ids are rate-limited per vault; a valid claim is never refused for them |
-| Expiry | 24 h default, 7 days max; revocable while unused (`coffer Work invites revoke <id>`, Vault Settings → Sharing) |
+| Expiry | 24 h default, 7 days max; revocable while unused (`vaultage Work invites revoke <id>`, Vault Settings → Sharing) |
 | Rotation | drops every open invite |
 | Server's view | invite id, claim public key, sealed payload, sealed label, times. Never the secret, the vault key or the label |
 | Joiner | gets a recovery key of their own (new slot, shown once); the invite key is not a way in |
@@ -190,7 +190,7 @@ Not covered on iOS: a jailbroken device or a malicious build while a vault is un
 ## Known gaps
 
 - No independent audit. Crypto crates are RustCrypto/dalek/BLAKE3; composition is ours.
-- Certificate pinning is opt-in and pins a CA or a self-signed server certificate you supply (`coffer trust`, iOS: Certificate Pinning). No trust-on-first-use, no public-key pinning of a public-CA leaf. Unpinned servers are checked against the bundled Mozilla roots.
+- Certificate pinning is opt-in and pins a CA or a self-signed server certificate you supply (`vaultage trust`, iOS: Certificate Pinning). No trust-on-first-use, no public-key pinning of a public-CA leaf. Unpinned servers are checked against the bundled Mozilla roots.
 - Rotation does not re-encrypt old data; a revoked device keeps what it already downloaded.
 - Any member can purge, rotate, invite or revoke invites. There are no roles.
 - Passphrase typed into the app can be keylogged by root/accessibility malware. Touch ID avoids typing.

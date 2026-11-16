@@ -51,7 +51,7 @@ final class ExternalEditor {
         if !UserDefaults.standard.bool(forKey: Pref.externalEditWarned) {
             let ok = await Alerts.confirm(
                 "Open “\(item.name)” in another app?",
-                "To let another app edit it, Coffer writes a decrypted copy to a private temporary folder. It stays on disk, unencrypted, until you stop editing, lock the vault or quit Coffer. Saved changes are encrypted back into the vault as a new version.",
+                "To let another app edit it, Vaultage writes a decrypted copy to a private temporary folder. It stays on disk, unencrypted, until you stop editing, lock the vault or quit Vaultage. Saved changes are encrypted back into the vault as a new version.",
                 action: "Open", destructive: false)
             guard ok else { return }
             UserDefaults.standard.set(true, forKey: Pref.externalEditWarned)

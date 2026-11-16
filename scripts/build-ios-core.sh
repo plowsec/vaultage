@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build libcoffer_ffi.a for iOS. Run by the Xcode target, or by hand:
+# Build libvaultage_ffi.a for iOS. Run by the Xcode target, or by hand:
 #   scripts/build-ios-core.sh [sim|device] [debug|release]
 # Debug = Rust dev profile (stays debuggable). Release on a device refuses debuggers.
 set -euo pipefail
@@ -17,4 +17,4 @@ esac
 
 # Clean environment: Xcode's SDKROOT and flags for the iOS SDK break build scripts compiled for the host.
 exec env -i HOME="$HOME" PATH="$HOME/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
-  cargo build --locked -p coffer-ffi --target "$TARGET" ${PROFILE[@]+"${PROFILE[@]}"} --manifest-path "$ROOT/Cargo.toml"
+  cargo build --locked -p vaultage-ffi --target "$TARGET" ${PROFILE[@]+"${PROFILE[@]}"} --manifest-path "$ROOT/Cargo.toml"

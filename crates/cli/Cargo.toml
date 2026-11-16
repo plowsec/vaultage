@@ -1,14 +1,14 @@
 [package]
-name = "coffer-cli"
+name = "vaultage-cli"
 version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "coffer"
+name = "vaultage"
 path = "src/main.rs"
 
 [dependencies]
-coffer-core = { path = "../core" }
+vaultage-core = { path = "../core" }
 serde_json.workspace = true
 libc.workspace = true
 zeroize.workspace = true

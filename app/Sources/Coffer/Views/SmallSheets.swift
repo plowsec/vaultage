@@ -178,7 +178,7 @@ struct AppSettingsView: View {
             }
             Section {
                 Toggle(isOn: $captureProtection) {
-                    Text("Hide Coffer windows from screenshots and screen sharing")
+                    Text("Hide Vaultage windows from screenshots and screen sharing")
                     Text("Best-effort: some capture tools and newer macOS versions may ignore it.")
                 }
                 .onChange(of: captureProtection) { _, _ in WindowProtector.shared.applyAll() }
@@ -210,6 +210,6 @@ struct AppSettingsView: View {
         .formStyle(.grouped)
         .frame(width: 500)
         .fixedSize(horizontal: false, vertical: true)
-        .navigationTitle("Coffer Settings")
+        .navigationTitle("Vaultage Settings")
     }
 }

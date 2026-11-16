@@ -1,7 +1,7 @@
 //! One-time invites, kept in the vault's meta document so every change is one atomic meta write
 //! (FS: under the vault lock; GCS: generation precondition). Pure functions over the list.
 
-use coffer_core::proto::{InviteCreateReq, InviteInfo, INVITE_MAX_FIELD, INVITE_MAX_PENDING, INVITE_MAX_TTL_MS, INVITE_RETRY_MS};
+use vaultage_core::proto::{InviteCreateReq, InviteInfo, INVITE_MAX_FIELD, INVITE_MAX_PENDING, INVITE_MAX_TTL_MS, INVITE_RETRY_MS};
 use serde::{Deserialize, Serialize};
 
 use super::{is_hex, SErr, R};
@@ -93,7 +93,7 @@ pub fn validate(req: &InviteCreateReq, now: i64) -> R<()> {
     if !is_hex(&req.id, 32) {
         return bad("bad invite id");
     }
-    let Some(pk) = coffer_core::hexutil::decode_array::<32>(&req.claim_pub) else { return bad("bad claim key") };
+    let Some(pk) = vaultage_core::hexutil::decode_array::<32>(&req.claim_pub) else { return bad("bad claim key") };
     if ed25519_dalek::VerifyingKey::from_bytes(&pk).is_err() {
         return bad("bad claim key");
     }
@@ -148,7 +148,7 @@ pub fn revoke(list: &mut Vec<InviteRec>, id: &str, now: i64) -> R<InviteOut> {
 /// The claim key of an invite (to verify the claim signature before `claim`).
 pub fn claim_key(list: &[InviteRec], id: &str) -> R<[u8; 32]> {
     let r = list.iter().find(|r| r.id == id).ok_or(SErr::NoInvite)?;
-    coffer_core::hexutil::decode_array::<32>(&r.claim_pub).ok_or_else(|| SErr::Internal("stored claim key".into()))
+    vaultage_core::hexutil::decode_array::<32>(&r.claim_pub).ok_or_else(|| SErr::Internal("stored claim key".into()))
 }
 
 /// Caller has verified the request signature against `claim_key`. A refusal is `Ok(Gone)`: the
@@ -188,7 +188,7 @@ mod tests {
         let sk = ed25519_dalek::SigningKey::from_bytes(&[id; 32]);
         InviteCreateReq {
             id: format!("{id:02x}").repeat(16),
-            claim_pub: coffer_core::hexutil::encode(sk.verifying_key().as_bytes()),
+            claim_pub: vaultage_core::hexutil::encode(sk.verifying_key().as_bytes()),
             blob: "abcd".into(),
             info: "ef01".into(),
             expires_ms: now + 1000,

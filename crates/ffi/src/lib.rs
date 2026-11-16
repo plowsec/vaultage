@@ -3,7 +3,7 @@
 use std::ffi::{c_char, CStr, CString};
 use std::sync::OnceLock;
 
-use coffer_core::manager::{default_home, Manager};
+use vaultage_core::manager::{default_home, Manager};
 use serde_json::{json, Value};
 use zeroize::Zeroize;
 
@@ -33,10 +33,10 @@ fn guarded<T>(f: impl FnOnce() -> T, on_panic: impl FnOnce() -> T) -> T {
 /// Apply process hardening. Call before anything else. Returns the posture as JSON.
 #[no_mangle]
 pub extern "C" fn coffer_harden() -> *mut c_char {
-    to_c(&serde_json::to_value(coffer_core::harden::harden()).unwrap_or(Value::Null))
+    to_c(&serde_json::to_value(vaultage_core::harden::harden()).unwrap_or(Value::Null))
 }
 
-/// Run one API request (see coffer_core::api). `secret` may be null. Free the result with
+/// Run one API request (see vaultage_core::api). `secret` may be null. Free the result with
 /// `coffer_free_string`.
 #[no_mangle]
 pub extern "C" fn coffer_call(request: *const c_char, secret: *const u8, secret_len: usize) -> *mut c_char {
@@ -52,7 +52,7 @@ pub extern "C" fn coffer_call(request: *const c_char, secret: *const u8, secret_
                 Err(e) => return fail("io", e),
             };
             let secret = if secret.is_null() { &[][..] } else { unsafe { std::slice::from_raw_parts(secret, secret_len) } };
-            to_c(&coffer_core::api::call(m, &req, secret))
+            to_c(&vaultage_core::api::call(m, &req, secret))
         },
         || fail("internal", "internal error".into()),
     )
@@ -70,7 +70,7 @@ pub extern "C" fn coffer_read(request: *const c_char, out_len: *mut usize, error
     };
     guarded(
         || {
-            let res = parse(request).and_then(|req| manager().and_then(|m| coffer_core::api::read(m, &req).map_err(|e| e.to_string())));
+            let res = parse(request).and_then(|req| manager().and_then(|m| vaultage_core::api::read(m, &req).map_err(|e| e.to_string())));
             match res {
                 Ok(data) => {
                     let mut boxed = data.into_boxed_slice();

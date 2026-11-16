@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build dist/Coffer.app: Rust core (static lib) + SwiftUI app, signed with the hardened runtime.
+# Build dist/Vaultage.app: Rust core (static lib) + SwiftUI app, signed with the hardened runtime.
 # Usage: scripts/build-app.sh [--debug]     CODESIGN_IDENTITY=<identity> to sign with a real identity.
 set -euo pipefail
 
@@ -12,31 +12,31 @@ case "${1:-}" in
 esac
 
 VERSION=0.1.0
-APP="$ROOT/dist/Coffer.app"
+APP="$ROOT/dist/Vaultage.app"
 export MACOSX_DEPLOYMENT_TARGET=14.0
 
 echo "==> Rust core (release)"
-cargo build --release --locked -p coffer-ffi --manifest-path "$ROOT/Cargo.toml"
+cargo build --release --locked -p vaultage-ffi --manifest-path "$ROOT/Cargo.toml"
 
 echo "==> Swift app ($CONFIG)"
-BIN="$(swift build -c "$CONFIG" --package-path "$ROOT/app" --show-bin-path)/Coffer"
+BIN="$(swift build -c "$CONFIG" --package-path "$ROOT/app" --show-bin-path)/Vaultage"
 # SwiftPM doesn't track the Rust static lib: force a relink so a rebuilt core is picked up.
-rm -f "$BIN" "$(dirname "$BIN")/coffer-selftest"
-swift build -c "$CONFIG" --package-path "$ROOT/app" --product Coffer
+rm -f "$BIN" "$(dirname "$BIN")/vaultage-selftest"
+swift build -c "$CONFIG" --package-path "$ROOT/app" --product Vaultage
 
 echo "==> Bundle"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/Coffer"
+cp "$BIN" "$APP/Contents/MacOS/Vaultage"
 
 ICON_KEY=""
-if swift "$ROOT/scripts/make-icon.swift" "$APP/Contents/Resources/Coffer.iconset" >/dev/null 2>&1 \
-   && iconutil -c icns -o "$APP/Contents/Resources/Coffer.icns" "$APP/Contents/Resources/Coffer.iconset"; then
-  ICON_KEY="<key>CFBundleIconFile</key><string>Coffer</string>"
+if swift "$ROOT/scripts/make-icon.swift" "$APP/Contents/Resources/Vaultage.iconset" >/dev/null 2>&1 \
+   && iconutil -c icns -o "$APP/Contents/Resources/Vaultage.icns" "$APP/Contents/Resources/Vaultage.iconset"; then
+  ICON_KEY="<key>CFBundleIconFile</key><string>Vaultage</string>"
 else
   echo "    (icon generation skipped)"
 fi
-rm -rf "$APP/Contents/Resources/Coffer.iconset"
+rm -rf "$APP/Contents/Resources/Vaultage.iconset"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -44,9 +44,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
   <key>CFBundleIdentifier</key><string>local.coffer.app</string>
-  <key>CFBundleName</key><string>Coffer</string>
-  <key>CFBundleDisplayName</key><string>Coffer</string>
-  <key>CFBundleExecutable</key><string>Coffer</string>
+  <key>CFBundleName</key><string>Vaultage</string>
+  <key>CFBundleDisplayName</key><string>Vaultage</string>
+  <key>CFBundleExecutable</key><string>Vaultage</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$VERSION</string>
@@ -57,7 +57,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSHighResolutionCapable</key><true/>
   <key>NSSupportsAutomaticTermination</key><false/>
   <key>NSSupportsSuddenTermination</key><false/>
-  <key>NSFaceIDUsageDescription</key><string>Coffer uses Touch ID to unlock your vaults.</string>
+  <key>NSFaceIDUsageDescription</key><string>Vaultage uses Touch ID to unlock your vaults.</string>
   $ICON_KEY
 </dict>
 </plist>

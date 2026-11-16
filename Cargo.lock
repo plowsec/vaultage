@@ -198,58 +198,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
-name = "coffer-cli"
-version = "0.1.0"
-dependencies = [
- "coffer-core",
- "libc",
- "qrcodegen",
- "serde_json",
- "zeroize",
-]
-
-[[package]]
-name = "coffer-core"
-version = "0.1.0"
-dependencies = [
- "argon2",
- "blake3",
- "chacha20poly1305",
- "ed25519-dalek",
- "getrandom 0.4.3",
- "libc",
- "serde",
- "serde_json",
- "tempfile",
- "ureq",
- "zeroize",
-]
-
-[[package]]
-name = "coffer-ffi"
-version = "0.1.0"
-dependencies = [
- "coffer-core",
- "serde_json",
- "zeroize",
-]
-
-[[package]]
-name = "coffer-server"
-version = "0.1.0"
-dependencies = [
- "axum",
- "blake3",
- "coffer-core",
- "ed25519-dalek",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "ureq",
-]
-
-[[package]]
 name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1026,6 +974,58 @@ name = "utf8-zero"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8c0a043c9540bae7c578c88f91dda8bd82e59ae27c21baca69c8b191aaf5a6e"
+
+[[package]]
+name = "vaultage-cli"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "qrcodegen",
+ "serde_json",
+ "vaultage-core",
+ "zeroize",
+]
+
+[[package]]
+name = "vaultage-core"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "blake3",
+ "chacha20poly1305",
+ "ed25519-dalek",
+ "getrandom 0.4.3",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "ureq",
+ "zeroize",
+]
+
+[[package]]
+name = "vaultage-ffi"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "vaultage-core",
+ "zeroize",
+]
+
+[[package]]
+name = "vaultage-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "blake3",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "ureq",
+ "vaultage-core",
+]
 
 [[package]]
 name = "wasi"

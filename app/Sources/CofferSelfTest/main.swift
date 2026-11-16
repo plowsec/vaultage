@@ -1,15 +1,18 @@
 // Headless round-trip through the same client code the app uses. Never prompts.
-// Usage: COFFER_HOME=<empty temp dir> coffer-selftest [--demo <folder to import>]
+// Usage: VAULTAGE_HOME=<empty temp dir> vaultage-selftest [--demo <folder to import>]
 // --demo leaves a vault "Demo" (passphrase "demo") with the folder's contents and a no-prompt
 // Secure Enclave slot; prints `<vault id> <slot id>` for `-seSlot.<id> <slot>` on the app's command line.
-// COFFER_TEST_URL + COFFER_TEST_TOKEN (a local cofferd) add attach / usage / invite / join / adopt checks;
-// the joining device is this binary re-run with another COFFER_HOME (secrets go over stdin).
+// VAULTAGE_TEST_URL + VAULTAGE_TEST_TOKEN (a local vaultaged) add attach / usage / invite / join / adopt checks;
+// the joining device is this binary re-run with another VAULTAGE_HOME (secrets go over stdin).
 import AVFoundation
 import CofferKit
 import Foundation
 
-guard let home = ProcessInfo.processInfo.environment["COFFER_HOME"], !home.isEmpty else {
-    FileHandle.standardError.write("set COFFER_HOME to an empty temporary directory\n".data(using: .utf8)!)
+let env0 = ProcessInfo.processInfo.environment
+// VAULTAGE_*, else the pre-rename VAULTAGE_* (the core reads both the same way).
+func envVar(_ k: String) -> String? { env0["VAULTAGE_" + k] ?? env0["VAULTAGE_" + k] }
+guard let home = envVar("HOME"), !home.isEmpty else {
+    FileHandle.standardError.write("set VAULTAGE_HOME to an empty temporary directory\n".data(using: .utf8)!)
     exit(2)
 }
 
@@ -142,10 +145,10 @@ func run() async throws {
     try await lifecycle()
     try await media()
     let env = ProcessInfo.processInfo.environment
-    if let url = env["COFFER_TEST_URL"], let token = env["COFFER_TEST_TOKEN"] {
+    if let url = envVar("TEST_URL"), let token = envVar("TEST_TOKEN") {
         try await server(url: url, token: token)
     } else {
-        print("skip server checks (COFFER_TEST_URL / COFFER_TEST_TOKEN not set)")
+        print("skip server checks (VAULTAGE_TEST_URL / VAULTAGE_TEST_TOKEN not set)")
     }
 }
 
@@ -306,13 +309,14 @@ func media() async throws {
     let _: PathResult = try await core.call(["op": "forget", "id": created.id])
 }
 
-/// Run this binary as another device (separate COFFER_HOME). `input` goes to its stdin.
+/// Run this binary as another device (separate VAULTAGE_HOME). `input` goes to its stdin.
 func child(_ args: [String], home: String, input: String) throws -> String {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
     p.arguments = args
     var env = ProcessInfo.processInfo.environment
-    env["COFFER_HOME"] = home
+    env["VAULTAGE_HOME"] = home
+    env["VAULTAGE_HOME"] = nil
     p.environment = env
     let inPipe = Pipe(), outPipe = Pipe()
     p.standardInput = inPipe
@@ -406,7 +410,7 @@ func server(url: String, token: String) async throws {
         let text = st3.sync.error.map(CofferError.readableSync) ?? ""
         check(text == CofferError.quotaFull, "quota full reads clearly (\(st3.sync.state): \(st3.sync.error ?? "no error"))")
     } else {
-        print("skip quota check (server has no small quota; run cofferd with --vault-quota-bytes)")
+        print("skip quota check (server has no small quota; run vaultaged with --vault-quota-bytes)")
     }
     try await core.perform(["op": "lock", "id": id])
 }

@@ -5,12 +5,12 @@ mod common;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use coffer_core::header::SlotKind;
-use coffer_core::http::{create_vault, HttpRemote};
-use coffer_core::manager::Manager;
-use coffer_core::remote::Remote;
-use coffer_core::testkit::fuzz_opts;
-use coffer_core::vault::Vault;
+use vaultage_core::header::SlotKind;
+use vaultage_core::http::{create_vault, HttpRemote};
+use vaultage_core::manager::Manager;
+use vaultage_core::remote::Remote;
+use vaultage_core::testkit::fuzz_opts;
+use vaultage_core::vault::Vault;
 use common::{Env, Kind, TOKEN};
 
 #[test]
@@ -88,7 +88,7 @@ fn one_time_invite_across_instances() {
     a.get(&id).unwrap().sync_blocking().unwrap();
     let code = a.invite(&id, "B", None).unwrap();
     // A header write after the invite keeps it (meta is one document).
-    a.add_slot(&id, SlotKind::Passphrase, "pw", b"pw", serde_json::Value::Null, Some(coffer_core::crypto::KdfParams::weak_for_tests())).unwrap();
+    a.add_slot(&id, SlotKind::Passphrase, "pw", b"pw", serde_json::Value::Null, Some(vaultage_core::crypto::KdfParams::weak_for_tests())).unwrap();
     a.get(&id).unwrap().sync_blocking().unwrap();
 
     // Claimed through instance 2, refused through instance 1.
@@ -98,6 +98,6 @@ fn one_time_invite_across_instances() {
     let r = b.get(&id).unwrap().sync_blocking().unwrap();
     assert!(r.errors.is_empty(), "{:?}", r.errors);
     let c = Manager::new(tmp.path().join("homeC"), false).unwrap();
-    assert!(matches!(c.join_invite("Docs", &code), Err(coffer_core::Error::Server(410, _))));
+    assert!(matches!(c.join_invite("Docs", &code), Err(vaultage_core::Error::Server(410, _))));
     assert_eq!(a.invites(&id).unwrap()[0].state, "used");
 }

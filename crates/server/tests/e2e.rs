@@ -5,15 +5,15 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use coffer_core::crypto::KdfParams;
-use coffer_core::header::SlotKind;
-use coffer_core::http::{create_vault, HttpRemote};
-use coffer_core::manager::Manager;
-use coffer_core::remote::Remote;
-use coffer_core::testkit::fuzz;
-use coffer_core::vault::Vault;
-use coffer_core::Error;
-use coffer_server::{spawn, Config, ServerHandle};
+use vaultage_core::crypto::KdfParams;
+use vaultage_core::header::SlotKind;
+use vaultage_core::http::{create_vault, HttpRemote};
+use vaultage_core::manager::Manager;
+use vaultage_core::remote::Remote;
+use vaultage_core::testkit::fuzz;
+use vaultage_core::vault::Vault;
+use vaultage_core::Error;
+use vaultage_server::{spawn, Config, ServerHandle};
 use serde_json::{json, Value};
 
 const TOKEN: &str = "enroll-token-for-tests";
@@ -156,7 +156,7 @@ fn json_api_local_vault() {
     let tmp = tempfile::tempdir().unwrap();
     let m = Manager::new(tmp.path().join("home"), true).unwrap();
     let call = |req: Value, secret: &[u8]| -> Value {
-        let r = coffer_core::api::call(&m, &req, secret);
+        let r = vaultage_core::api::call(&m, &req, secret);
         assert_eq!(r["ok"], true, "{req} -> {r}");
         r["data"].clone()
     };
@@ -172,7 +172,7 @@ fn json_api_local_vault() {
     assert_eq!(rep["files"], 1);
     let items = call(json!({"op": "list", "id": id, "path": "inbox"}), b"")["items"].clone();
     let entry = items[0]["id"].as_str().unwrap().to_string();
-    assert_eq!(coffer_core::api::read(&m, &json!({"id": id, "entry": entry})).unwrap(), b"hi");
+    assert_eq!(vaultage_core::api::read(&m, &json!({"id": id, "entry": entry})).unwrap(), b"hi");
     call(json!({"op": "rename", "id": id, "from": "inbox/note.txt", "to": "note.txt"}), b"");
     call(json!({"op": "delete", "id": id, "paths": ["note.txt"]}), b"");
     assert_eq!(call(json!({"op": "trash", "id": id}), b"").as_array().unwrap().len(), 1);
@@ -187,9 +187,9 @@ fn json_api_local_vault() {
     assert_eq!(se_slot["public"]["key"], "AAAA");
     for (kind, slot, secret) in [("passphrase", Value::Null, &b"a real passphrase"[..]), ("recovery", Value::Null, recovery.as_bytes()), ("secure-enclave", se_slot["id"].clone(), &[7u8; 32])] {
         call(json!({"op": "lock", "id": id}), b"");
-        let locked = coffer_core::api::call(&m, &json!({"op": "list", "id": id, "path": ""}), b"");
+        let locked = vaultage_core::api::call(&m, &json!({"op": "list", "id": id, "path": ""}), b"");
         assert_eq!(locked["code"], "locked");
-        let bad = coffer_core::api::call(&m, &json!({"op": "unlock", "id": id, "kind": kind, "slot": slot}), b"wrong wrong wrong wrong wrong wro");
+        let bad = vaultage_core::api::call(&m, &json!({"op": "unlock", "id": id, "kind": kind, "slot": slot}), b"wrong wrong wrong wrong wrong wro");
         assert_eq!(bad["ok"], false);
         call(json!({"op": "unlock", "id": id, "kind": kind, "slot": slot}), secret);
         assert_eq!(call(json!({"op": "list", "id": id, "path": ""}), b"")["items"].as_array().unwrap().len(), 2);

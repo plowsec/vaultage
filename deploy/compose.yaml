@@ -1,16 +1,16 @@
 # Run from deploy/:  docker compose up -d
-# Needs deploy/.env (COFFER_DOMAIN=...) and deploy/secrets/enroll_token.
-name: coffer
+# Needs deploy/.env (VAULTAGE_DOMAIN=...) and deploy/secrets/enroll_token.
+name: coffer   # kept from before the rename: the data volume is named after it
 
 services:
-  cofferd:
-    image: cofferd:${COFFER_VERSION:-0.1.0}
+  vaultaged:
+    image: vaultaged:${VAULTAGE_VERSION:-0.1.0}
     build:
       context: ..
       dockerfile: deploy/Dockerfile
     restart: unless-stopped
     environment:
-      COFFER_ENROLL_TOKEN_FILE: /run/secrets/enroll_token
+      VAULTAGE_ENROLL_TOKEN_FILE: /run/secrets/enroll_token
     secrets:
       - enroll_token
     volumes:
@@ -31,13 +31,13 @@ services:
     image: caddy:2.11.3-alpine
     restart: unless-stopped
     depends_on:
-      - cofferd
+      - vaultaged
     ports:
       - "80:80"
       - "443:443"
       - "443:443/udp"
     environment:
-      COFFER_DOMAIN: ${COFFER_DOMAIN:?set COFFER_DOMAIN in deploy/.env}
+      VAULTAGE_DOMAIN: ${VAULTAGE_DOMAIN:?set VAULTAGE_DOMAIN in deploy/.env}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

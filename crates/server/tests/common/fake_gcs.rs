@@ -1,4 +1,4 @@
-//! In-memory fake of the GCS JSON API subset cofferd uses: media/multipart insert, get
+//! In-memory fake of the GCS JSON API subset vaultaged uses: media/multipart insert, get
 //! (media + metadata), metadata patch, delete, list (prefix, startOffset, pagination), with
 //! generation/metageneration preconditions (412) and fault injection.
 #![allow(clippy::result_large_err)]

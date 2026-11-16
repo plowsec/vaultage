@@ -8,9 +8,9 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use coffer_core::hexutil;
-use coffer_core::proto::{sign_request, ENROLL_HEADER};
-use coffer_server::{spawn, Config, GcsConfig, ServerHandle, StoreKind};
+use vaultage_core::hexutil;
+use vaultage_core::proto::{sign_request, ENROLL_HEADER};
+use vaultage_server::{spawn, Config, GcsConfig, ServerHandle, StoreKind};
 use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
 

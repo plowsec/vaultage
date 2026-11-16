@@ -217,11 +217,11 @@ struct PostureView: View {
         let p = app.posture
         return [
             Row(id: "Hardened runtime", ok: p.hardenedRuntime,
-                explanation: p.hardenedRuntime == true ? "Other processes can’t inject code into Coffer." : "Not signed with the hardened runtime; code injection isn’t blocked."),
+                explanation: p.hardenedRuntime == true ? "Other processes can’t inject code into Vaultage." : "Not signed with the hardened runtime; code injection isn’t blocked."),
             Row(id: "Not debuggable", ok: p.debuggable.map { !$0 },
                 explanation: p.debuggable == false ? "The signature doesn’t allow debuggers to attach." : "The signature allows debugging (development build)."),
             Row(id: "Debugger attach denied", ok: p.attachDenied,
-                explanation: p.attachDenied ? "Coffer refuses debugger attachment at runtime." : "Runtime attach denial is off (debug build)."),
+                explanation: p.attachDenied ? "Vaultage refuses debugger attachment at runtime." : "Runtime attach denial is off (debug build)."),
             Row(id: "Core dumps off", ok: p.coreDumpsOff,
                 explanation: p.coreDumpsOff ? "A crash can’t write memory, including keys, to disk." : "A crash could write memory to disk."),
             Row(id: "System Integrity Protection", ok: p.sip,
@@ -243,7 +243,7 @@ struct PostureView: View {
                     .foregroundStyle(app.posture.needsAttention ? .orange : .green)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Security Status").font(.headline)
-                    Text(app.posture.needsAttention ? "Some protections are missing in this build." : "Coffer’s memory is protected from other apps.")
+                    Text(app.posture.needsAttention ? "Some protections are missing in this build." : "Vaultage’s memory is protected from other apps.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }

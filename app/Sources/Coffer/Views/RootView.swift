@@ -115,7 +115,7 @@ struct WelcomeView: View {
                 .foregroundStyle(.tint)
                 .symbolRenderingMode(.hierarchical)
             VStack(spacing: 6) {
-                Text("Welcome to Coffer").font(.largeTitle.weight(.semibold))
+                Text("Welcome to Vaultage").font(.largeTitle.weight(.semibold))
                 Text("Files you put in a vault are encrypted on this Mac before they’re stored or synced.")
                     .font(.title3)
                     .foregroundStyle(.secondary)
@@ -154,7 +154,7 @@ struct MissingVaultView: View {
         ContentUnavailableView {
             Label("Vault Folder Not Found", systemImage: "questionmark.folder")
         } description: {
-            Text("Coffer can’t find the encrypted folder for “\(vault.name)”. It may have been moved, renamed or deleted, or its disk isn’t connected.")
+            Text("Vaultage can’t find the encrypted folder for “\(vault.name)”. It may have been moved, renamed or deleted, or its disk isn’t connected.")
             Text(vault.path)
                 .font(.callout.monospaced())
                 .foregroundStyle(.secondary)

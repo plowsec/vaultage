@@ -47,7 +47,7 @@ struct JoinVaultSheet: View {
         if let joinedID, let key = joinedKey {
             RecoveryKeyView(vaultName: name.isEmpty ? "Vault" : name, recoveryKey: key, hasOtherUnlock: false, note: nil,
                             subtitle: "You joined “\(name.isEmpty ? "Vault" : name)”.",
-                            message: "The invite is used up and opens nothing now. This recovery key is your own way into the vault, on this Mac or another device. Coffer doesn’t keep a copy.",
+                            message: "The invite is used up and opens nothing now. This recovery key is your own way into the vault, on this Mac or another device. Vaultage doesn’t keep a copy.",
                             doneTitle: "Continue") {
                 withAnimation(.snappy) { joinedKey = nil }
             }
@@ -287,7 +287,7 @@ struct VaultSettingsSheet: View {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Remove from This Mac")
-                                Text("Locks the vault and removes it from Coffer. The encrypted folder stays until you trash it.")
+                                Text("Locks the vault and removes it from Vaultage. The encrypted folder stays until you trash it.")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()

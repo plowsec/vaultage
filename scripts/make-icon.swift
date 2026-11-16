@@ -1,7 +1,7 @@
-// Renders the Coffer app icon into an .iconset folder (AppKit only). Usage: swift make-icon.swift <out.iconset>
+// Renders the Vaultage app icon into an .iconset folder (AppKit only). Usage: swift make-icon.swift <out.iconset>
 import AppKit
 
-let out = URL(fileURLWithPath: CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "Coffer.iconset")
+let out = URL(fileURLWithPath: CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "Vaultage.iconset")
 try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
 
 func draw(_ px: Int) -> Data {

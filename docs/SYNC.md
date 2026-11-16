@@ -51,7 +51,7 @@ Path collisions resolve the same way on every device (committed beats uncommitte
 
 ## Local vault → synced
 
-`coffer Private connect --server URL --token-file F` / Vault Settings → Sync with a Server…
+`vaultage Private connect --server URL --token-file F` / Vault Settings → Sync with a Server…
 
 - Uploads the kept history in order, then flips the vault to synced. Read-only while it runs.
 - Interrupted: run it again; it verifies what the server already has and continues.

@@ -200,8 +200,8 @@ struct RecoveryKeyView: View {
             SheetHeader(icon: "key.horizontal", title: title, subtitle: subtitle ?? "“\(vaultName)” was created.")
             VStack(alignment: .leading, spacing: 16) {
                 Text(message ?? (hasOtherUnlock
-                     ? "This key opens the vault if you forget your passphrase or lose this Mac. Coffer doesn’t keep a copy."
-                     : "This key is the only way into the vault if this Mac is lost or replaced. Coffer doesn’t keep a copy."))
+                     ? "This key opens the vault if you forget your passphrase or lose this Mac. Vaultage doesn’t keep a copy."
+                     : "This key is the only way into the vault if this Mac is lost or replaced. Vaultage doesn’t keep a copy."))
                     .fixedSize(horizontal: false, vertical: true)
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 10) {
                     ForEach(Array(groups.enumerated()), id: \.offset) { _, g in
@@ -257,14 +257,14 @@ struct RecoveryKeyView: View {
     }
 
     private func printKey() {
-        let text = "Coffer recovery key\n\nVault: \(vaultName)\n\n\(recoveryKey)\n\nKeep this somewhere safe. Anyone with this key can open the vault."
+        let text = "Vaultage recovery key\n\nVault: \(vaultName)\n\n\(recoveryKey)\n\nKeep this somewhere safe. Anyone with this key can open the vault."
         let tv = NSTextView(frame: NSRect(x: 0, y: 0, width: 468, height: 300))
         tv.string = text
         tv.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
         let info = NSPrintInfo.shared.copy() as! NSPrintInfo
         info.jobDisposition = .spool
         let op = NSPrintOperation(view: tv, printInfo: info)
-        op.jobTitle = "Coffer Recovery Key"
+        op.jobTitle = "Vaultage Recovery Key"
         op.showsPrintPanel = true
         if let w = NSApp.keyWindow {
             op.runModal(for: w, delegate: nil, didRun: nil, contextInfo: nil)

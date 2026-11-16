@@ -9,7 +9,7 @@ use common::*;
 use ed25519_dalek::SigningKey;
 use serde_json::json;
 
-fn two(env: &Env, grace: u64) -> (coffer_server::ServerHandle, coffer_server::ServerHandle) {
+fn two(env: &Env, grace: u64) -> (vaultage_server::ServerHandle, vaultage_server::ServerHandle) {
     let a = env.start_with(|c| c.gc_grace_secs = grace);
     let b = env.start_with(|c| c.gc_grace_secs = grace);
     (a, b)
@@ -219,7 +219,7 @@ fn prune_on_one_instance_seen_by_other() {
     let (x, _) = ca.put_chunk(b"x-data");
     assert_eq!(ca.commit(&e, 0, 1, b"SECRET-one", &[&x]).status, 200);
     assert_eq!(cb.commit(&e, 1, 2, b"two", &[]).status, 200);
-    assert_eq!(cb.full_log().1[0]["blob"], coffer_core::hexutil::encode(b"SECRET-one"));
+    assert_eq!(cb.full_log().1[0]["blob"], vaultage_core::hexutil::encode(b"SECRET-one"));
     assert_eq!(
         ca.prune(&[(&e, 2)]).json(),
         json!({"records": 1, "chunks": 1, "bytes": 6})
@@ -307,8 +307,8 @@ fn corrupt_record_object_is_500() {
     assert_eq!(c.log("").status, 500);
 }
 
-/// Manual runs: `FAKE_GCS_SECS=60 cargo test -p coffer-server --test gcs serve_fake -- --ignored --nocapture`,
-/// then `STORAGE_EMULATOR_HOST=<printed addr> cofferd --store gcs://test-bucket/pfx`.
+/// Manual runs: `FAKE_GCS_SECS=60 cargo test -p vaultage-server --test gcs serve_fake -- --ignored --nocapture`,
+/// then `STORAGE_EMULATOR_HOST=<printed addr> vaultaged --store gcs://test-bucket/pfx`.
 #[test]
 #[ignore]
 fn serve_fake() {

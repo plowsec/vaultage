@@ -1,4 +1,4 @@
-//! Coffer server: zero-knowledge store for encrypted chunks and an append-only record log.
+//! Vaultage server: zero-knowledge store for encrypted chunks and an append-only record log.
 
 mod api;
 mod ratelimit;
@@ -122,17 +122,17 @@ pub fn spawn(cfg: Config, bind: &str) -> std::io::Result<ServerHandle> {
         .enable_all()
         .build()?;
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-    let thread = std::thread::Builder::new().name("cofferd".into()).spawn(move || {
+    let thread = std::thread::Builder::new().name("vaultaged".into()).spawn(move || {
         rt.block_on(async move {
             let l = match tokio::net::TcpListener::from_std(listener) {
                 Ok(l) => l,
-                Err(e) => return eprintln!("cofferd: listener: {e}"),
+                Err(e) => return eprintln!("vaultaged: listener: {e}"),
             };
             let shutdown = async {
                 let _ = rx.await;
             };
             if let Err(e) = axum::serve(l, app).with_graceful_shutdown(shutdown).await {
-                eprintln!("cofferd: serve: {e}");
+                eprintln!("vaultaged: serve: {e}");
             }
         });
         rt.shutdown_timeout(Duration::from_secs(10));

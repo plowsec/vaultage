@@ -7,7 +7,7 @@ struct CofferApp: App {
     @State private var app = AppModel.shared
 
     var body: some Scene {
-        Window("Coffer", id: "main") {
+        Window("Vaultage", id: "main") {
             RootView()
                 .environment(app)
                 .frame(minWidth: 900, minHeight: 560)

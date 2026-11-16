@@ -10,7 +10,7 @@ pub mod invites;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use coffer_core::proto::{PruneResp, UsageResp};
+use vaultage_core::proto::{PruneResp, UsageResp};
 use serde::{Deserialize, Serialize};
 
 use invites::{InviteOut, InviteRec};
@@ -87,7 +87,7 @@ pub trait Store: Send + Sync {
 }
 
 pub fn hex(b: &[u8]) -> String {
-    coffer_core::hexutil::encode(b)
+    vaultage_core::hexutil::encode(b)
 }
 
 pub fn is_hex(s: &str, len: usize) -> bool {
@@ -157,7 +157,7 @@ impl Meta {
 
     pub fn decode(b: &[u8]) -> Result<(Meta, MetaParsed), String> {
         let m: Meta = serde_json::from_slice(b).map_err(|e| format!("parse meta: {e}"))?;
-        let auth_pub = coffer_core::hexutil::decode_array::<32>(&m.auth_pub).ok_or("meta: bad auth_pub")?;
+        let auth_pub = vaultage_core::hexutil::decode_array::<32>(&m.auth_pub).ok_or("meta: bad auth_pub")?;
         let hv: serde_json::Value = serde_json::from_str(&m.header).map_err(|e| format!("meta header: {e}"))?;
         let version = header_version(&hv).ok_or("meta header: no version")?;
         let p = MetaParsed {
@@ -177,7 +177,7 @@ pub const LEN: usize = 4;
 pub const TAG: usize = 16;
 pub const FIXED: usize = 8 + 16 + 8 + 4;
 /// Blob and refs come from one JSON body as hex: together at most half of it.
-pub const MAX_PAYLOAD: usize = FIXED + coffer_core::proto::MAX_JSON_BODY / 2;
+pub const MAX_PAYLOAD: usize = FIXED + vaultage_core::proto::MAX_JSON_BODY / 2;
 pub const MAX_FRAME: u64 = (LEN + MAX_PAYLOAD + TAG) as u64;
 
 pub fn payload_len(refs: usize, blob: usize) -> usize {

@@ -1,52 +1,52 @@
-//! `coffer`: command-line client. One-shot: unlocks, acts, syncs, forgets the key.
+//! `vaultage`: command-line client. One-shot: unlocks, acts, syncs, forgets the key.
 
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::exit;
 
-use coffer_core::header::SlotKind;
-use coffer_core::manager::{default_home, Manager, OpenVault};
-use coffer_core::model::{normalize_path, EntryId};
-use coffer_core::{harden, Error, Result};
+use vaultage_core::header::SlotKind;
+use vaultage_core::manager::{default_home, Manager, OpenVault};
+use vaultage_core::model::{normalize_path, EntryId};
+use vaultage_core::{harden, Error, Result};
 use zeroize::Zeroize;
 
 const USAGE: &str = "\
-coffer — encrypted vaults
+vaultage — encrypted vaults
 
-  coffer vaults                                   list vaults
-  coffer new <name> [--server URL --token T|--token-file F] [--passphrase]
-  coffer join <name> --server URL --vault ID      (unlock secret as below)
-  coffer join <name> --invite                     (prompts for the invite; or COFFER_INVITE)
-  coffer forget <vault>                           remove from this machine's list (files stay)
-  coffer posture                                  process hardening status
-  coffer trust [URL --ca FILE.pem | URL --clear]  pin a server to your own CA / certificate; no args: list
+  vaultage vaults                                   list vaults
+  vaultage new <name> [--server URL --token T|--token-file F] [--passphrase]
+  vaultage join <name> --server URL --vault ID      (unlock secret as below)
+  vaultage join <name> --invite                     (prompts for the invite; or VAULTAGE_INVITE)
+  vaultage forget <vault>                           remove from this machine's list (files stay)
+  vaultage posture                                  process hardening status
+  vaultage trust [URL --ca FILE.pem | URL --clear]  pin a server to your own CA / certificate; no args: list
 
-  coffer <vault> ls [path]            coffer <vault> add <src>... [--to DIR] [--move]
-  coffer <vault> cat <path>           coffer <vault> get <path>... --out DIR [--move]
-  coffer <vault> mv <from> <to>       coffer <vault> rm <path>...
-  coffer <vault> mkdir <path>         coffer <vault> versions <path>
-  coffer <vault> restore <path|entry-id> [rev]
-  coffer <vault> trash                coffer <vault> sync [--watch]
-  coffer <vault> passwd               add a passphrase
-  coffer <vault> info                 coffer <vault> usage
-  coffer <vault> empty-trash          erase trashed files for good, everywhere
-  coffer <vault> prune <path>         keep only the current version of a file
-  coffer <vault> connect --server URL --token T|--token-file F     local vault -> synced
-  coffer <vault> invite [label] [--qr] [--hours N]   one-time invite (full access), default 24 h
-  coffer <vault> invites [revoke ID]  list invites (waiting/used/expired/revoked); revoke a waiting one
-  coffer <vault> rotate [--passphrase]   new keys; every other device, passphrase, invite is out
-  coffer <vault> adopt                after a rotation elsewhere: enter the NEW secret
+  vaultage <vault> ls [path]            vaultage <vault> add <src>... [--to DIR] [--move]
+  vaultage <vault> cat <path>           vaultage <vault> get <path>... --out DIR [--move]
+  vaultage <vault> mv <from> <to>       vaultage <vault> rm <path>...
+  vaultage <vault> mkdir <path>         vaultage <vault> versions <path>
+  vaultage <vault> restore <path|entry-id> [rev]
+  vaultage <vault> trash                vaultage <vault> sync [--watch]
+  vaultage <vault> passwd               add a passphrase
+  vaultage <vault> info                 vaultage <vault> usage
+  vaultage <vault> empty-trash          erase trashed files for good, everywhere
+  vaultage <vault> prune <path>         keep only the current version of a file
+  vaultage <vault> connect --server URL --token T|--token-file F     local vault -> synced
+  vaultage <vault> invite [label] [--qr] [--hours N]   one-time invite (full access), default 24 h
+  vaultage <vault> invites [revoke ID]  list invites (waiting/used/expired/revoked); revoke a waiting one
+  vaultage <vault> rotate [--passphrase]   new keys; every other device, passphrase, invite is out
+  vaultage <vault> adopt                after a rotation elsewhere: enter the NEW secret
 
 Options go anywhere after the command; a name or path starting with '-' goes after --
-(coffer forget -- -old). -h / --help anywhere prints this and changes nothing.
+(vaultage forget -- -old). -h / --help anywhere prints this and changes nothing.
 <vault> is a name or id prefix. Unlock: prompts for the passphrase; --recovery prompts for the
-recovery key. Non-interactive: COFFER_PASSPHRASE or COFFER_RECOVERY_KEY. State: $COFFER_HOME.
+recovery key. Non-interactive: VAULTAGE_PASSPHRASE or VAULTAGE_RECOVERY_KEY. State: $VAULTAGE_HOME.
 --move deletes the source after the copy is verified (add) / removes from the vault (get).
-rotate: COFFER_NEW_PASSPHRASE, COFFER_YES=1 for scripts.
+rotate: VAULTAGE_NEW_PASSPHRASE, VAULTAGE_YES=1 for scripts. Old VAULTAGE_* names still work.
 ";
 
 fn die(msg: impl std::fmt::Display) -> ! {
-    eprintln!("coffer: {msg}");
+    eprintln!("vaultage: {msg}");
     exit(1)
 }
 
@@ -54,7 +54,7 @@ fn die(msg: impl std::fmt::Display) -> ! {
 fn prompt_secret(label: &str) -> Vec<u8> {
     let stdin = std::io::stdin();
     if !stdin.is_terminal() {
-        die(format!("{label} needed but stdin is not a terminal (set COFFER_PASSPHRASE or COFFER_RECOVERY_KEY)"));
+        die(format!("{label} needed but stdin is not a terminal (set VAULTAGE_PASSPHRASE or VAULTAGE_RECOVERY_KEY)"));
     }
     eprint!("{label}: ");
     let _ = std::io::stderr().flush();
@@ -75,15 +75,15 @@ fn prompt_secret(label: &str) -> Vec<u8> {
 }
 
 fn unlock_secret(recovery: bool) -> (SlotKind, Vec<u8>) {
-    if let Ok(k) = std::env::var("COFFER_RECOVERY_KEY") {
+    if let Some(k) = vaultage_core::env_var("RECOVERY_KEY") {
         return (SlotKind::Recovery, k.into_bytes());
     }
     if recovery {
         return (SlotKind::Recovery, prompt_secret("Recovery key"));
     }
-    match std::env::var("COFFER_PASSPHRASE") {
-        Ok(p) => (SlotKind::Passphrase, p.into_bytes()),
-        Err(_) => (SlotKind::Passphrase, prompt_secret("Passphrase")),
+    match vaultage_core::env_var("PASSPHRASE") {
+        Some(p) => (SlotKind::Passphrase, p.into_bytes()),
+        None => (SlotKind::Passphrase, prompt_secret("Passphrase")),
     }
 }
 
@@ -95,13 +95,13 @@ fn token_arg(args: &mut Args) -> String {
     }
 }
 
-/// `reuse_unlock_env`: for a brand-new vault/slot COFFER_PASSPHRASE may supply it; a rotation must
+/// `reuse_unlock_env`: for a brand-new vault/slot VAULTAGE_PASSPHRASE may supply it; a rotation must
 /// not silently reuse the passphrase it is replacing.
 fn new_passphrase(reuse_unlock_env: bool) -> Vec<u8> {
-    if let Ok(p) = std::env::var("COFFER_NEW_PASSPHRASE") {
+    if let Some(p) = vaultage_core::env_var("NEW_PASSPHRASE") {
         return p.into_bytes();
     }
-    if let (true, Ok(p)) = (reuse_unlock_env, std::env::var("COFFER_PASSPHRASE")) {
+    if let (true, Some(p)) = (reuse_unlock_env, vaultage_core::env_var("PASSPHRASE")) {
         return p.into_bytes();
     }
     let a = prompt_secret("New passphrase");
@@ -264,7 +264,7 @@ fn find_vault(m: &Manager, key: &str) -> String {
     let hits: Vec<_> = all.iter().filter(|v| v.name == key || v.id.starts_with(key)).collect();
     match hits.len() {
         1 => hits[0].id.clone(),
-        0 => die(format!("no vault named '{key}' (see `coffer vaults`)")),
+        0 => die(format!("no vault named '{key}' (see `vaultage vaults`)")),
         _ => die(format!("'{key}' matches several vaults; use the id")),
     }
 }
@@ -276,22 +276,22 @@ fn sync_and_report(ov: &OpenVault) {
     match ov.sync_blocking() {
         Ok(r) => {
             for e in &r.errors {
-                eprintln!("coffer: warning: {e}");
+                eprintln!("vaultage: warning: {e}");
             }
             for c in ov.v().conflicts.drain(..) {
-                eprintln!("coffer: conflict: {c}");
+                eprintln!("vaultage: conflict: {c}");
             }
             eprintln!("synced (↓{} ↑{} chunks↓{})", r.pulled, r.pushed, r.downloaded);
         }
-        Err(Error::Net(e)) => eprintln!("coffer: offline ({e}); {} change(s) kept locally, will sync later", ov.v().pending_count()),
-        Err(_) if ov.status().state == "rekeyed" => die("this vault's keys were rotated on another device; continue with: coffer <vault> adopt   (enter the NEW recovery key or passphrase)"),
+        Err(Error::Net(e)) => eprintln!("vaultage: offline ({e}); {} change(s) kept locally, will sync later", ov.v().pending_count()),
+        Err(_) if ov.status().state == "rekeyed" => die("this vault's keys were rotated on another device; continue with: vaultage <vault> adopt   (enter the NEW recovery key or passphrase)"),
         Err(e) => die(format!("sync stopped: {e}")),
     }
 }
 
 fn run() -> Result<()> {
     let mut args = Args::parse(std::env::args().skip(1).collect());
-    // Before anything touches the vault list: `coffer new --help` must not create a vault.
+    // Before anything touches the vault list: `vaultage new --help` must not create a vault.
     if args.wants_help() || args.v.first().is_some_and(|a| a == "help") {
         print!("{USAGE}");
         return Ok(());
@@ -340,7 +340,7 @@ fn run() -> Result<()> {
             let name = args.need("vault name").or_die();
             args.done().or_die();
             if invite {
-                let mut code = std::env::var("COFFER_INVITE").map(String::into_bytes).unwrap_or_else(|_| prompt_secret("Invite"));
+                let mut code = vaultage_core::env_var("INVITE").map(String::into_bytes).unwrap_or_else(|| prompt_secret("Invite"));
                 let res = m.join_invite(&name, std::str::from_utf8(&code).unwrap_or(""));
                 code.zeroize();
                 let (id, recovery_key) = res?;
@@ -349,9 +349,9 @@ fn run() -> Result<()> {
                 match recovery_key {
                     Some(k) => {
                         println!("recovery key: {k}");
-                        eprintln!("\nThe invite is used up. Write this recovery key down: it is your way in (COFFER_RECOVERY_KEY).\nAdd a passphrase too: coffer {name} passwd");
+                        eprintln!("\nThe invite is used up. Write this recovery key down: it is your way in (VAULTAGE_RECOVERY_KEY).\nAdd a passphrase too: vaultage {name} passwd");
                     }
-                    None => eprintln!("Old-style invite: it keeps working until removed. Add your own passphrase now: coffer {name} passwd\n(unlock with the invite key via COFFER_RECOVERY_KEY)"),
+                    None => eprintln!("Old-style invite: it keeps working until removed. Add your own passphrase now: vaultage {name} passwd\n(unlock with the invite key via VAULTAGE_RECOVERY_KEY)"),
                 }
                 return Ok(());
             }
@@ -458,7 +458,7 @@ fn run() -> Result<()> {
             }
             let rep = m.import(&id, &sources, &dest, mv)?;
             for s in &rep.skipped {
-                eprintln!("coffer: skipped {s}");
+                eprintln!("vaultage: skipped {s}");
             }
             println!("encrypted {} file(s), {}{}", rep.files, human(rep.bytes), if mv { format!("; removed {} original(s)", rep.sources_deleted) } else { String::new() });
             changed = true;
@@ -510,7 +510,7 @@ fn run() -> Result<()> {
             println!("entry {}", e.hex());
             for ver in v.versions(&e)? {
                 let tag = if ver.pending { "pending" } else if ver.deleted { "deleted" } else if ver.current { "current" } else { "" };
-                println!("rev {:<4} {}  {:>10}  {:<12} {} {}", ver.rev, coffer_core::model::stamp(ver.ts), human(ver.size), ver.device, ver.path, tag);
+                println!("rev {:<4} {}  {:>10}  {:<12} {} {}", ver.rev, vaultage_core::model::stamp(ver.ts), human(ver.size), ver.device, ver.path, tag);
             }
         }
         "restore" => {
@@ -528,7 +528,7 @@ fn run() -> Result<()> {
         "trash" => {
             args.done().or_die();
             for t in ov.v().trash() {
-                println!("{}  {}  {:>10}  {}", t.id, coffer_core::model::stamp(t.deleted_ts), human(t.size), t.path);
+                println!("{}  {}  {:>10}  {}", t.id, vaultage_core::model::stamp(t.deleted_ts), human(t.size), t.path);
             }
         }
         "passwd" => {
@@ -583,7 +583,7 @@ fn run() -> Result<()> {
             }
             println!("{code}");
             code.zeroize();
-            eprintln!("\nWorks once, for {} h. Whoever uses it first gets full access to the vault.\nSee or revoke: coffer {first} invites. To cut off someone who joined: coffer {first} rotate", hours.unwrap_or(24));
+            eprintln!("\nWorks once, for {} h. Whoever uses it first gets full access to the vault.\nSee or revoke: vaultage {first} invites. To cut off someone who joined: vaultage {first} rotate", hours.unwrap_or(24));
         }
         "invites" => {
             let revoke = match args.next().or_die().as_deref() {
@@ -600,7 +600,7 @@ fn run() -> Result<()> {
                 println!("revoked {}", &one.id[..8]);
                 return Ok(());
             }
-            let now = coffer_core::model::now_ms();
+            let now = vaultage_core::model::now_ms();
             for i in list {
                 let when = match i.state.as_str() {
                     "waiting" => format!("expires {}", rel(i.expires, now)),
@@ -621,8 +621,8 @@ fn run() -> Result<()> {
                 p.zeroize();
             }
             println!("new recovery key: {recovery_key}");
-            eprintln!("\nStore it now. After this step the old recovery key, passphrases, invites and every other\ndevice stop working. Other devices continue with: coffer {first} adopt");
-            if std::env::var("COFFER_YES").is_err() {
+            eprintln!("\nStore it now. After this step the old recovery key, passphrases, invites and every other\ndevice stop working. Other devices continue with: vaultage {first} adopt");
+            if vaultage_core::env_var_os("YES").is_none() {
                 eprint!("Type yes to rotate: ");
                 let mut line = String::new();
                 let _ = std::io::stdin().lock().read_line(&mut line);

@@ -1,13 +1,14 @@
-# /etc/systemd/system/cofferd.service
+# /etc/systemd/system/vaultaged.service
 # Token: /etc/coffer/enroll_token (root:root 0600), passed as a systemd credential.
+# /etc/coffer and /var/lib/coffer keep their pre-rename names so existing servers keep their data.
 [Unit]
-Description=Coffer vault server
+Description=Vaultage vault server
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=exec
-ExecStart=/usr/local/bin/cofferd --data /var/lib/coffer --listen 127.0.0.1:8787 --enroll-token-file %d/enroll_token
+ExecStart=/usr/local/bin/vaultaged --data /var/lib/coffer --listen 127.0.0.1:8787 --enroll-token-file %d/enroll_token
 LoadCredential=enroll_token:/etc/coffer/enroll_token
 Restart=on-failure
 RestartSec=2

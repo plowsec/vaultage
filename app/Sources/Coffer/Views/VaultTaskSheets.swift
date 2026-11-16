@@ -295,7 +295,7 @@ struct RotateKeysSheet: View {
                 note: resumed ? "A rotation was already prepared; this is its recovery key. A passphrase set then still applies." : nil,
                 title: "Save the New Recovery Key",
                 subtitle: "Nothing has changed yet.",
-                message: "When you rotate, this key replaces the current recovery key of “\(name)”. Coffer doesn’t keep a copy.",
+                message: "When you rotate, this key replaces the current recovery key of “\(name)”. Vaultage doesn’t keep a copy.",
                 doneTitle: committing ? "Rotating…" : "Rotate Keys",
                 working: committing,
                 error: error,
@@ -310,7 +310,7 @@ struct RotateKeysSheet: View {
             SheetHeader(icon: "checkmark.shield", title: "Keys Rotated", subtitle: "“\(name)” now uses new keys.")
             VStack(alignment: .leading, spacing: 10) {
                 if synced {
-                    bullet("laptopcomputer.and.iphone", "On each of your other devices, open Coffer and enter the new recovery key\(newPassphrase ? " or the new passphrase" : "") when asked. They don’t sync until then.")
+                    bullet("laptopcomputer.and.iphone", "On each of your other devices, open Vaultage and enter the new recovery key\(newPassphrase ? " or the new passphrase" : "") when asked. They don’t sync until then.")
                     bullet("person.badge.key", "Anyone you invited before needs a new invite.")
                 } else {
                     bullet("key.horizontal", "Use the new recovery key\(newPassphrase ? " or the new passphrase" : "") to unlock from now on.")

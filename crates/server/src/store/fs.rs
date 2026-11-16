@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use coffer_core::proto::{PruneResp, UsageResp};
+use vaultage_core::proto::{PruneResp, UsageResp};
 
 use super::*;
 
@@ -126,7 +126,7 @@ fn walk_chunks(dir: &Path, clean: bool) -> io::Result<Vec<ChunkFile>> {
                 continue;
             }
             let Some(cid) = is_hex(&name, 64)
-                .then(|| coffer_core::hexutil::decode_array::<32>(&name))
+                .then(|| vaultage_core::hexutil::decode_array::<32>(&name))
                 .flatten()
             else {
                 continue;
@@ -222,7 +222,7 @@ impl Vault {
         let good = v.replay(file_len).map_err(|e| ctx("replay log", &e))?;
         if good < file_len {
             eprintln!(
-                "cofferd: {}: truncating torn log tail ({} bytes at offset {good})",
+                "vaultaged: {}: truncating torn log tail ({} bytes at offset {good})",
                 dir.display(),
                 file_len - good
             );
@@ -468,7 +468,7 @@ impl FsStore {
                 }
                 Ok(None) => return Err(SErr::NoVault),
                 Err(e) => {
-                    eprintln!("cofferd: vault unusable: {e}");
+                    eprintln!("vaultaged: vault unusable: {e}");
                     *g = State::Broken;
                 }
             }
@@ -482,7 +482,7 @@ impl FsStore {
             Ok(r) => Ok(r),
             Err(Fail::Http(e)) => Err(e),
             Err(Fail::Fatal(e)) => {
-                eprintln!("cofferd: vault {} poisoned: {e}", hex(vid));
+                eprintln!("vaultaged: vault {} poisoned: {e}", hex(vid));
                 *g = State::Broken;
                 Err(SErr::Internal("vault storage error".into()))
             }

@@ -4,7 +4,7 @@ mod common;
 
 use std::time::Duration;
 
-use coffer_core::hexutil;
+use vaultage_core::hexutil;
 use common::*;
 use ed25519_dalek::SigningKey;
 use serde_json::json;

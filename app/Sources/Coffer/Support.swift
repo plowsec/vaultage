@@ -140,7 +140,7 @@ enum Alerts {
         if ce?.isIntegrity == true {
             a.alertStyle = .critical
             a.messageText = "Vault data failed an integrity check"
-            a.informativeText = (ce?.errorDescription ?? "") + "\n\nThis means the encrypted data was modified or damaged on disk or on the server. Coffer refused to use it. Don’t delete anything yet; keep a copy of the vault folder."
+            a.informativeText = (ce?.errorDescription ?? "") + "\n\nThis means the encrypted data was modified or damaged on disk or on the server. Vaultage refused to use it. Don’t delete anything yet; keep a copy of the vault folder."
         } else {
             a.alertStyle = .warning
             a.messageText = title ?? "The operation couldn’t be completed"
