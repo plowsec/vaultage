@@ -37,6 +37,8 @@ coffer — encrypted vaults
   coffer <vault> rotate [--passphrase]   new keys; every other device, passphrase, invite is out
   coffer <vault> adopt                after a rotation elsewhere: enter the NEW secret
 
+Options go anywhere after the command; a name or path starting with '-' goes after --
+(coffer forget -- -old). -h / --help anywhere prints this and changes nothing.
 <vault> is a name or id prefix. Unlock: prompts for the passphrase; --recovery prompts for the
 recovery key. Non-interactive: COFFER_PASSPHRASE or COFFER_RECOVERY_KEY. State: $COFFER_HOME.
 --move deletes the source after the copy is verified (add) / removes from the vault (get).
@@ -86,7 +88,7 @@ fn unlock_secret(recovery: bool) -> (SlotKind, Vec<u8>) {
 }
 
 fn token_arg(args: &mut Args) -> String {
-    match (args.opt("--token"), args.opt("--token-file")) {
+    match (args.opt("--token").or_die(), args.opt("--token-file").or_die()) {
         (Some(t), _) => t,
         (None, Some(f)) => std::fs::read_to_string(f).unwrap_or_else(|e| die(e)).trim().to_string(),
         _ => String::new(),
@@ -112,26 +114,98 @@ fn new_passphrase(reuse_unlock_env: bool) -> Vec<u8> {
     a
 }
 
-struct Args(Vec<String>);
+/// Every option the CLI knows. An option's value may not be one of these (`--server --passphrase`).
+const OPTIONS: &[&str] = &[
+    "--recovery", "--server", "--token", "--token-file", "--passphrase", "--invite", "--vault", "--ca", "--clear", "--to",
+    "--move", "--out", "--qr", "--hours", "--watch",
+];
+
+fn is_help(a: &str) -> bool {
+    a == "-h" || a == "--help"
+}
+
+/// Options are taken out first (`flag`, `opt`); what is left are positionals (`next`, `need`,
+/// `rest`). A positional that looks like an option is refused, so a typo or `--help` never
+/// becomes a vault name or a path. Everything after `--` is positional as written.
+#[derive(Debug)]
+struct Args {
+    v: Vec<String>,
+    literal: Vec<String>,
+}
 impl Args {
+    fn parse(mut v: Vec<String>) -> Args {
+        let literal = match v.iter().position(|a| a == "--") {
+            Some(i) => v.split_off(i).split_off(1),
+            None => Vec::new(),
+        };
+        Args { v, literal }
+    }
+    fn wants_help(&self) -> bool {
+        self.v.iter().any(|a| is_help(a))
+    }
     fn flag(&mut self, name: &str) -> bool {
-        let before = self.0.len();
-        self.0.retain(|a| a != name);
-        before != self.0.len()
+        let before = self.v.len();
+        self.v.retain(|a| a != name);
+        before != self.v.len()
     }
-    fn opt(&mut self, name: &str) -> Option<String> {
-        let i = self.0.iter().position(|a| a == name)?;
-        if i + 1 >= self.0.len() {
-            die(format!("{name} needs a value"));
+    fn opt(&mut self, name: &str) -> std::result::Result<Option<String>, String> {
+        let Some(i) = self.v.iter().position(|a| a == name) else { return Ok(None) };
+        if i + 1 >= self.v.len() || OPTIONS.contains(&self.v[i + 1].as_str()) {
+            return Err(format!("{name} needs a value"));
         }
-        self.0.remove(i);
-        Some(self.0.remove(i))
+        self.v.remove(i);
+        Ok(Some(self.v.remove(i)))
     }
-    fn next(&mut self) -> Option<String> {
-        if self.0.is_empty() { None } else { Some(self.0.remove(0)) }
+    fn positional(a: String) -> std::result::Result<String, String> {
+        if a.len() > 1 && a.starts_with('-') {
+            return Err(format!("unknown option '{a}' (for a name or path starting with '-', put it after --)"));
+        }
+        Ok(a)
     }
-    fn need(&mut self, what: &str) -> String {
-        self.next().unwrap_or_else(|| die(format!("missing {what}\n\n{USAGE}")))
+    fn next(&mut self) -> std::result::Result<Option<String>, String> {
+        if !self.v.is_empty() {
+            return Self::positional(self.v.remove(0)).map(Some);
+        }
+        Ok(if self.literal.is_empty() { None } else { Some(self.literal.remove(0)) })
+    }
+    fn need(&mut self, what: &str) -> std::result::Result<String, String> {
+        self.next()?.ok_or_else(|| format!("missing {what}\n\n{USAGE}"))
+    }
+    /// All remaining positionals.
+    fn rest(&mut self) -> std::result::Result<Vec<String>, String> {
+        let mut out = self.v.drain(..).map(Self::positional).collect::<std::result::Result<Vec<_>, _>>()?;
+        out.append(&mut self.literal);
+        Ok(out)
+    }
+    /// Refuse options `cmd` does not take, before anything is unlocked or changed. `valued`
+    /// options consume the next argument.
+    fn only(&self, cmd: &str, flags: &[&str], valued: &[&str]) -> std::result::Result<(), String> {
+        let mut it = self.v.iter();
+        while let Some(a) = it.next() {
+            if valued.contains(&a.as_str()) {
+                it.next();
+            } else if a.len() > 1 && a.starts_with('-') && !flags.contains(&a.as_str()) {
+                return Err(format!("'{cmd}' does not take '{a}' (for a name or path starting with '-', put it after --)"));
+            }
+        }
+        Ok(())
+    }
+    /// Nothing may be left over: a misspelled option must not be ignored.
+    fn done(&mut self) -> std::result::Result<(), String> {
+        match self.rest()?.first() {
+            Some(a) => Err(format!("unexpected argument '{a}'")),
+            None => Ok(()),
+        }
+    }
+}
+
+/// `die` on a bad command line.
+trait OrDie<T> {
+    fn or_die(self) -> T;
+}
+impl<T> OrDie<T> for std::result::Result<T, String> {
+    fn or_die(self) -> T {
+        self.unwrap_or_else(|e| die(e))
     }
 }
 
@@ -216,14 +290,16 @@ fn sync_and_report(ov: &OpenVault) {
 }
 
 fn run() -> Result<()> {
-    let mut args = Args(std::env::args().skip(1).collect());
+    let mut args = Args::parse(std::env::args().skip(1).collect());
+    // Before anything touches the vault list: `coffer new --help` must not create a vault.
+    if args.wants_help() || args.v.first().is_some_and(|a| a == "help") {
+        print!("{USAGE}");
+        return Ok(());
+    }
     let recovery = args.flag("--recovery");
-    let first = match args.next() {
-        Some(a) if a != "-h" && a != "--help" && a != "help" => a,
-        _ => {
-            print!("{USAGE}");
-            return Ok(());
-        }
+    let Some(first) = args.next().or_die() else {
+        print!("{USAGE}");
+        return Ok(());
     };
     let m = Manager::new(default_home(), false)?;
 
@@ -240,10 +316,12 @@ fn run() -> Result<()> {
             return Ok(());
         }
         "new" => {
-            let name = args.need("vault name");
-            let server = args.opt("--server");
+            let server = args.opt("--server").or_die();
             let token = token_arg(&mut args);
-            let pass = args.flag("--passphrase").then(|| new_passphrase(true));
+            let want_pass = args.flag("--passphrase");
+            let name = args.need("vault name").or_die();
+            args.done().or_die();
+            let pass = want_pass.then(|| new_passphrase(true));
             let (id, recovery_key) = m.create(&name, server.as_deref().map(|s| (s, token.as_str())))?;
             if let Some(mut p) = pass {
                 m.add_slot(&id, SlotKind::Passphrase, "Passphrase", &p, serde_json::Value::Null, None)?;
@@ -256,8 +334,12 @@ fn run() -> Result<()> {
             return Ok(());
         }
         "join" => {
-            let name = args.need("vault name");
-            if args.flag("--invite") {
+            let invite = args.flag("--invite");
+            let server = args.opt("--server").or_die();
+            let vault = args.opt("--vault").or_die();
+            let name = args.need("vault name").or_die();
+            args.done().or_die();
+            if invite {
                 let mut code = std::env::var("COFFER_INVITE").map(String::into_bytes).unwrap_or_else(|_| prompt_secret("Invite"));
                 let res = m.join_invite(&name, std::str::from_utf8(&code).unwrap_or(""));
                 code.zeroize();
@@ -273,8 +355,8 @@ fn run() -> Result<()> {
                 }
                 return Ok(());
             }
-            let server = args.opt("--server").unwrap_or_else(|| die("--server URL required"));
-            let vault = args.opt("--vault").unwrap_or_else(|| die("--vault ID required"));
+            let server = server.unwrap_or_else(|| die("--server URL required"));
+            let vault = vault.unwrap_or_else(|| die("--vault ID required"));
             let (kind, mut secret) = unlock_secret(recovery);
             let id = m.join(&name, &server, &vault, kind, &secret)?;
             secret.zeroize();
@@ -283,18 +365,22 @@ fn run() -> Result<()> {
             return Ok(());
         }
         "trust" => {
-            match args.next() {
+            let clear = args.flag("--clear");
+            let ca = args.opt("--ca").or_die();
+            let url = args.next().or_die();
+            args.done().or_die();
+            match url {
                 None => {
                     for (url, pem) in m.trust() {
                         println!("{url}  {} certificate(s)", pem.matches("BEGIN CERTIFICATE").count());
                     }
                 }
-                Some(url) if args.flag("--clear") => {
+                Some(url) if clear => {
                     m.set_trust(&url, None)?;
                     println!("{url}: public certificate authorities");
                 }
                 Some(url) => {
-                    let file = args.opt("--ca").unwrap_or_else(|| die("--ca FILE.pem or --clear required"));
+                    let file = ca.unwrap_or_else(|| die("--ca FILE.pem or --clear required"));
                     m.set_trust(&url, Some(&std::fs::read_to_string(&file)?))?;
                     println!("{url}: pinned to {file}");
                 }
@@ -302,7 +388,9 @@ fn run() -> Result<()> {
             return Ok(());
         }
         "forget" => {
-            let id = find_vault(&m, &args.need("vault"));
+            let key = args.need("vault").or_die();
+            args.done().or_die();
+            let id = find_vault(&m, &key);
             println!("removed from list; data left at {}", m.forget(&id)?.display());
             return Ok(());
         }
@@ -310,8 +398,19 @@ fn run() -> Result<()> {
     }
 
     let id = find_vault(&m, &first);
-    let cmd = args.need("command");
+    let cmd = args.need("command").or_die();
+    let (flags, valued): (&[&str], &[&str]) = match cmd.as_str() {
+        "add" => (&["--move"], &["--to"]),
+        "get" => (&["--move"], &["--out"]),
+        "connect" => (&[], &["--server", "--token", "--token-file"]),
+        "invite" => (&["--qr"], &["--hours"]),
+        "rotate" => (&["--passphrase"], &[]),
+        "sync" => (&["--watch"], &[]),
+        _ => (&[], &[]),
+    };
+    args.only(&cmd, flags, valued).or_die();
     if cmd == "adopt" {
+        args.done().or_die();
         // Takes the NEW secret; the old one no longer matters.
         let (kind, mut secret) = unlock_secret(recovery);
         let res = m.adopt_rekey(&id, kind, &secret);
@@ -330,7 +429,8 @@ fn run() -> Result<()> {
 
     match cmd.as_str() {
         "ls" => {
-            let path = args.next().unwrap_or_default();
+            let path = args.next().or_die().unwrap_or_default();
+            args.done().or_die();
             for it in ov.v().list(&path)? {
                 let mark = if it.pending { "↑" } else { " " };
                 if it.is_dir {
@@ -341,7 +441,8 @@ fn run() -> Result<()> {
             }
         }
         "cat" => {
-            let path = normalize_path(&args.need("path"))?;
+            let path = normalize_path(&args.need("path").or_die())?;
+            args.done().or_die();
             let reader = { let v = ov.v(); let e = v.find(&path).ok_or_else(|| Error::NotFound(path.clone()))?.id; v.reader(&e, None)? };
             // Raw fd: std's stdout is line-buffered, which is very slow for binary data.
             use std::os::unix::io::FromRawFd;
@@ -349,9 +450,9 @@ fn run() -> Result<()> {
             ov.with_remote(|r| reader.write_to(&mut *out, r))?;
         }
         "add" => {
-            let dest = args.opt("--to").unwrap_or_default();
+            let dest = args.opt("--to").or_die().unwrap_or_default();
             let mv = args.flag("--move");
-            let sources: Vec<PathBuf> = args.0.drain(..).map(PathBuf::from).collect();
+            let sources: Vec<PathBuf> = args.rest().or_die().into_iter().map(PathBuf::from).collect();
             if sources.is_empty() {
                 die("nothing to add");
             }
@@ -367,32 +468,43 @@ fn run() -> Result<()> {
             }
         }
         "get" => {
-            let out = PathBuf::from(args.opt("--out").unwrap_or_else(|| die("--out DIR required")));
+            let out = PathBuf::from(args.opt("--out").or_die().unwrap_or_else(|| die("--out DIR required")));
             let mv = args.flag("--move");
-            let paths: Vec<String> = args.0.drain(..).collect();
+            let paths = args.rest().or_die();
+            if paths.is_empty() {
+                die("nothing to get");
+            }
             for p in m.export(&id, &paths, &out, mv)? {
                 println!("{}", p.display());
             }
             changed = mv;
         }
         "mv" => {
-            let (from, to) = (args.need("source"), args.need("destination"));
+            let (from, to) = (args.need("source").or_die(), args.need("destination").or_die());
+            args.done().or_die();
             ov.v().rename(&from, &to)?;
             changed = true;
         }
         "rm" => {
-            for p in args.0.drain(..) {
+            let paths = args.rest().or_die();
+            if paths.is_empty() {
+                die("nothing to remove");
+            }
+            for p in paths {
                 let n = ov.v().delete(&p)?;
                 println!("moved {n} item(s) to trash: {p}");
             }
             changed = true;
         }
         "mkdir" => {
-            ov.v().mkdir(&args.need("path"))?;
+            let path = args.need("path").or_die();
+            args.done().or_die();
+            ov.v().mkdir(&path)?;
             changed = true;
         }
         "versions" => {
-            let path = normalize_path(&args.need("path"))?;
+            let path = normalize_path(&args.need("path").or_die())?;
+            args.done().or_die();
             let v = ov.v();
             let e = v.find(&path).ok_or_else(|| Error::NotFound(path.clone()))?.id;
             println!("entry {}", e.hex());
@@ -402,8 +514,9 @@ fn run() -> Result<()> {
             }
         }
         "restore" => {
-            let what = args.need("path or entry id");
-            let rev = args.next().map(|r| r.parse::<u64>().unwrap_or_else(|_| die("rev must be a number")));
+            let what = args.need("path or entry id").or_die();
+            let rev = args.next().or_die().map(|r| r.parse::<u64>().unwrap_or_else(|_| die("rev must be a number")));
+            args.done().or_die();
             let mut v = ov.v();
             let e = match EntryId::parse(&what) {
                 Ok(e) if v.entry(&e).is_some() => e,
@@ -413,11 +526,13 @@ fn run() -> Result<()> {
             changed = true;
         }
         "trash" => {
+            args.done().or_die();
             for t in ov.v().trash() {
                 println!("{}  {}  {:>10}  {}", t.id, coffer_core::model::stamp(t.deleted_ts), human(t.size), t.path);
             }
         }
         "passwd" => {
+            args.done().or_die();
             let mut p = new_passphrase(true);
             m.add_slot(&id, SlotKind::Passphrase, "Passphrase", &p, serde_json::Value::Null, None)?;
             p.zeroize();
@@ -425,37 +540,43 @@ fn run() -> Result<()> {
             changed = true;
         }
         "info" => {
+            args.done().or_die();
             let v = ov.v();
             let s = v.summary();
             println!("id:      {}\nserver:  {}\nfiles:   {} ({})\npending: {}\ntrash:   {}", v.id_hex(), v.config.remote.as_deref().unwrap_or("none (local vault)"), s.files, human(s.bytes), s.pending, s.trashed);
         }
         "usage" => {
+            args.done().or_die();
             let u = m.usage(&id)?;
             println!("chunks:  {} ({})\nrecords: {}\nquota:   {}", u.chunks, human(u.bytes), u.records, u.quota.map(human).unwrap_or_else(|| "none".into()));
         }
         "empty-trash" => {
+            args.done().or_die();
             let n = ov.v().empty_trash()?;
             println!("erased {n} trashed item(s) for good");
             changed = true;
         }
         "prune" => {
-            let path = normalize_path(&args.need("path"))?;
+            let path = normalize_path(&args.need("path").or_die())?;
+            args.done().or_die();
             let e = ov.v().find(&path).ok_or_else(|| Error::NotFound(path.clone()))?.id;
             ov.v().prune_versions(&e)?;
             println!("older versions of {path} erased");
             changed = true;
         }
         "connect" => {
-            let server = args.opt("--server").unwrap_or_else(|| die("--server URL required"));
+            let server = args.opt("--server").or_die().unwrap_or_else(|| die("--server URL required"));
             let token = token_arg(&mut args);
+            args.done().or_die();
             m.attach(&id, &server, &token)?;
             println!("vault now syncs with {server}");
             changed = true;
         }
         "invite" => {
             let qr = args.flag("--qr");
-            let hours = args.opt("--hours").map(|h| h.parse::<i64>().ok().filter(|h| (1..=168).contains(h)).unwrap_or_else(|| die("--hours must be 1..168")));
-            let label = args.next().unwrap_or_default();
+            let hours = args.opt("--hours").or_die().map(|h| h.parse::<i64>().ok().filter(|h| (1..=168).contains(h)).unwrap_or_else(|| die("--hours must be 1..168")));
+            let label = args.next().or_die().unwrap_or_default();
+            args.done().or_die();
             let mut code = m.invite(&id, &label, hours.map(|h| h * 3600 * 1000))?;
             if qr {
                 eprint!("{}", qr_text(&code));
@@ -465,9 +586,14 @@ fn run() -> Result<()> {
             eprintln!("\nWorks once, for {} h. Whoever uses it first gets full access to the vault.\nSee or revoke: coffer {first} invites. To cut off someone who joined: coffer {first} rotate", hours.unwrap_or(24));
         }
         "invites" => {
+            let revoke = match args.next().or_die().as_deref() {
+                None => None,
+                Some("revoke") => Some(args.need("invite id").or_die().to_lowercase()),
+                Some(other) => die(format!("unknown invites command '{other}' (only: revoke ID)")),
+            };
+            args.done().or_die();
             let list = m.invites(&id)?;
-            if args.next().as_deref() == Some("revoke") {
-                let p = args.need("invite id").to_lowercase();
+            if let Some(p) = revoke {
                 let hits: Vec<_> = list.iter().filter(|i| i.id.starts_with(&p)).collect();
                 let [one] = hits[..] else { die(format!("{} invites match '{p}'", hits.len())) };
                 m.revoke_invite(&id, &one.id)?;
@@ -487,7 +613,9 @@ fn run() -> Result<()> {
             }
         }
         "rotate" => {
-            let mut pass = args.flag("--passphrase").then(|| new_passphrase(false));
+            let want_pass = args.flag("--passphrase");
+            args.done().or_die();
+            let mut pass = want_pass.then(|| new_passphrase(false));
             let recovery_key = m.rotate_prepare(&id, pass.as_deref(), None)?;
             if let Some(p) = pass.as_mut() {
                 p.zeroize();
@@ -508,10 +636,12 @@ fn run() -> Result<()> {
             changed = true;
         }
         "sync" => {
+            let watch = args.flag("--watch");
+            args.done().or_die();
             if !ov.v().synced() {
                 die("this is a local vault; nothing to sync");
             }
-            if args.flag("--watch") {
+            if watch {
                 loop {
                     sync_and_report(&ov);
                     std::thread::sleep(std::time::Duration::from_secs(5));
@@ -531,5 +661,71 @@ fn main() {
     harden::harden();
     if let Err(e) = run() {
         die(e);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Args;
+
+    fn args(s: &[&str]) -> Args {
+        Args::parse(s.iter().map(|a| a.to_string()).collect())
+    }
+
+    #[test]
+    fn help_anywhere_but_not_after_double_dash() {
+        assert!(args(&["new", "--help"]).wants_help());
+        assert!(args(&["new", "Work", "-h"]).wants_help());
+        assert!(!args(&["forget", "--", "--help"]).wants_help());
+    }
+
+    #[test]
+    fn flag_like_positionals_are_refused() {
+        let mut a = args(&["--pasphrase", "Work"]);
+        assert!(a.need("vault name").unwrap_err().contains("unknown option '--pasphrase'"));
+        let mut a = args(&["a", "-r", "b"]);
+        assert!(a.rest().is_err());
+        // "-" alone is an ordinary argument.
+        assert_eq!(args(&["-"]).need("x").unwrap(), "-");
+    }
+
+    #[test]
+    fn double_dash_makes_the_rest_literal() {
+        let mut a = args(&["--", "--help", "-x"]);
+        assert_eq!(a.need("vault").unwrap(), "--help");
+        assert_eq!(a.rest().unwrap(), ["-x"]);
+        let mut a = args(&["a", "--", "-b"]);
+        assert_eq!(a.rest().unwrap(), ["a", "-b"]);
+    }
+
+    #[test]
+    fn options_before_or_after_positionals() {
+        let mut a = args(&["--server", "https://s", "Work", "--passphrase"]);
+        assert_eq!(a.opt("--server").unwrap().as_deref(), Some("https://s"));
+        assert!(a.flag("--passphrase"));
+        assert_eq!(a.need("vault name").unwrap(), "Work");
+        assert!(a.done().is_ok());
+    }
+
+    #[test]
+    fn option_value_cannot_be_another_option() {
+        assert!(args(&["--server", "--passphrase"]).opt("--server").is_err());
+        assert!(args(&["--server"]).opt("--server").is_err());
+        // A value that merely starts with '-' (a token) is fine.
+        assert_eq!(args(&["--token", "-abc"]).opt("--token").unwrap().as_deref(), Some("-abc"));
+    }
+
+    #[test]
+    fn leftovers_are_errors() {
+        let mut a = args(&["Work", "extra"]);
+        a.need("vault").unwrap();
+        assert!(a.done().unwrap_err().contains("'extra'"));
+    }
+
+    #[test]
+    fn only_allows_the_command_options() {
+        assert!(args(&["src", "--to", "-dir", "--move"]).only("add", &["--move"], &["--to"]).is_ok());
+        assert!(args(&["src", "--mvoe"]).only("add", &["--move"], &["--to"]).unwrap_err().contains("--mvoe"));
+        assert!(args(&["--", "-file"]).only("rm", &[], &[]).is_ok());
     }
 }
