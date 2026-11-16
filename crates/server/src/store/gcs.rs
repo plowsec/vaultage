@@ -19,6 +19,16 @@
 //!   (metageneration changed → 412) or less than grace before (1) (kept as young).
 //!   Residual: clock skew or a stalled instance exceeding grace/2. With grace 0 only the
 //!   in-process lock protects, i.e. safe only with a single instance.
+//!
+//! Drive chunks (`GcsConfig.drive`): chunk bytes go to Google Drive; `chunks/<cid>` becomes an
+//! empty pointer object (metadata d=Drive file id, n=size), so everything above still decides.
+//! - put: upload to Drive, then insert the pointer (ifGenerationMatch=0). Lost the race →
+//!   delete our file. Pointer outcome unknown → keep it (swept later if unreferenced).
+//! - GC: delete the pointer (conditional), then the Drive file it named.
+//! - Drive folders: `<vault id>/` under the configured folder, then 16 shards `0`..`f`; each
+//!   folder id is recorded in `drive/<vault|shard>` (insert-if-absent picks the one).
+//! - Prune sweeps Drive files no pointer names, older than max(grace, ORPHAN_MIN_AGE).
+//! - A chunk object without `d` holds its bytes (written before Drive was enabled): still read.
 
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -27,6 +37,7 @@ use std::time::{Duration, Instant};
 
 use vaultage_core::proto::{PruneResp, UsageResp};
 
+use super::gdrive::{self, DErr, DFile, DriveChunks};
 use super::*;
 use crate::GcsConfig;
 
@@ -37,10 +48,12 @@ const ATTEMPTS: u32 = 5;
 const PAR: usize = 8;
 const MAX_BODY: u64 = 64 << 20;
 const DEFAULT_ENDPOINT: &str = "https://storage.googleapis.com";
+/// Unreferenced Drive files younger than this are never swept (uploads awaiting their pointer).
+const ORPHAN_MIN_AGE: Duration = Duration::from_secs(15 * 60);
 const METADATA_TOKEN_URL: &str =
     "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(super) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -68,6 +81,16 @@ impl From<GErr> for SErr {
 
 type G<T> = Result<T, GErr>;
 
+impl From<DErr> for SErr {
+    fn from(e: DErr) -> SErr {
+        match e {
+            DErr::Unavailable(m) => SErr::Unavailable(m),
+            DErr::Quota => SErr::Quota,
+            DErr::Other(m) => SErr::Internal(m),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Obj {
     name: String,
@@ -92,7 +115,7 @@ struct Client {
 }
 
 /// Percent-encode everything but unreserved chars (object names contain '/').
-fn enc(s: &str) -> String {
+pub(super) fn enc(s: &str) -> String {
     let mut o = String::with_capacity(s.len() * 3);
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
@@ -104,7 +127,7 @@ fn enc(s: &str) -> String {
     o
 }
 
-fn jitter_ms() -> u64 {
+pub(super) fn jitter_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.subsec_nanos() as u64 % 100)
@@ -112,7 +135,7 @@ fn jitter_ms() -> u64 {
 }
 
 /// RFC 3339 (`2026-01-02T03:04:05.678Z` or with ±hh:mm) → unix ms.
-fn parse_rfc3339(s: &str) -> Option<i64> {
+pub(super) fn parse_rfc3339(s: &str) -> Option<i64> {
     let b = s.as_bytes();
     if b.len() < 20 || b[4] != b'-' || b[7] != b'-' || !matches!(b[10], b'T' | b't') || b[13] != b':' || b[16] != b':' {
         return None;
@@ -501,7 +524,7 @@ fn json(b: &[u8]) -> G<serde_json::Value> {
 }
 
 /// Order-preserving parallel map (scoped threads).
-fn par_map<T: Sync, U: Send>(items: &[T], f: impl Fn(&T) -> U + Sync) -> Vec<U> {
+pub(super) fn par_map<T: Sync, U: Send>(items: &[T], f: impl Fn(&T) -> U + Sync) -> Vec<U> {
     if items.len() <= 1 {
         return items.iter().map(f).collect();
     }
@@ -568,6 +591,12 @@ pub struct GcsStore {
     grace: Duration,
     quota: Option<u64>,
     vaults: Mutex<HashMap<Id16, Arc<GVault>>>,
+    drive: Option<DriveChunks>,
+}
+
+/// Stored bytes of a chunk object: its size, or for a Drive pointer the size it records.
+fn chunk_bytes(o: &Obj) -> u64 {
+    o.metadata.get("n").and_then(|n| n.parse().ok()).unwrap_or(o.size)
 }
 
 fn rec_meta(entry: &Id16, rev: u64, placeholder: bool) -> Vec<(&'static str, String)> {
@@ -599,6 +628,7 @@ impl GcsStore {
             .timeout_global(Some(Duration::from_secs(120)))
             .build()
             .into();
+        let drive = cfg.drive.as_deref().map(DriveChunks::new).transpose()?;
         Ok(GcsStore {
             c: Client {
                 agent,
@@ -610,6 +640,7 @@ impl GcsStore {
             grace,
             quota,
             vaults: Mutex::new(HashMap::new()),
+            drive,
         })
     }
 
@@ -825,7 +856,7 @@ impl GcsStore {
             }
         }
         let objs = self.c.list(&self.chunk_prefix(vid), None)?;
-        let (bytes, chunks) = (objs.iter().map(|o| o.size).sum(), objs.len() as u64);
+        let (bytes, chunks) = (objs.iter().map(chunk_bytes).sum(), objs.len() as u64);
         *lock(&v.usage) = Some(Usage {
             at: Instant::now(),
             bytes,
@@ -879,6 +910,160 @@ impl GcsStore {
             }
         }
         Ok(())
+    }
+}
+
+impl GcsStore {
+    /// Drive folder `name` ("vault", or a shard "0".."f") of a vault, created on first use. The
+    /// object `drive/<name>` picks the one folder (insert-if-absent); a losing folder is deleted.
+    fn drive_folder(&self, dc: &DriveChunks, vid: &Id16, name: &str) -> R<String> {
+        if let Some(id) = dc.folder(vid, name) {
+            return Ok(id);
+        }
+        let reg = format!("{}drive/{name}", self.vbase(vid));
+        let read = |o: &Obj| {
+            o.metadata
+                .get("id")
+                .filter(|i| gdrive::id_ok(i))
+                .cloned()
+                .ok_or_else(|| SErr::Internal(format!("{reg}: no folder id")))
+        };
+        if let Some(o) = self.c.stat(&reg)? {
+            let id = read(&o)?;
+            dc.set_folder(vid, name, &id);
+            return Ok(id);
+        }
+        let (parent, title) = if name == "vault" {
+            (dc.root.clone(), hex(vid))
+        } else {
+            (self.drive_folder(dc, vid, "vault")?, name.to_owned())
+        };
+        let ours = dc.d.create_folder(&title, Some(&parent))?;
+        let id = match self.c.insert(&reg, &[], 0, &[("id", ours.clone())]) {
+            Ok(_) => ours,
+            Err(GErr::Precondition) => {
+                let o = self
+                    .c
+                    .stat(&reg)?
+                    .ok_or_else(|| SErr::Unavailable(format!("{reg} changing")))?;
+                let winner = read(&o)?;
+                if winner != ours {
+                    let _ = dc.d.delete(&ours);
+                }
+                winner
+            }
+            // Outcome unknown: keep the folder (an empty folder is harmless).
+            Err(e) => return Err(e.into()),
+        };
+        dc.set_folder(vid, name, &id);
+        Ok(id)
+    }
+
+    /// Upload to Drive, then point at it. true = our file became the chunk.
+    fn put_chunk_drive(&self, dc: &DriveChunks, vid: &Id16, cid: &Cid, data: &[u8]) -> R<bool> {
+        let h = hex(cid);
+        let folder = self.drive_folder(dc, vid, &h[..1])?;
+        let fid = dc.d.upload(&h, &folder, data)?;
+        let name = self.chunk_name(vid, cid);
+        match self.c.insert(&name, &[], 0, &[("d", fid.clone()), ("n", data.len().to_string())]) {
+            Ok(_) => {
+                dc.set_id(vid, cid, &fid);
+                Ok(true)
+            }
+            Err(GErr::Precondition) => match self.c.stat(&name)? {
+                // Ours landed, reply lost.
+                Some(o) if o.metadata.get("d") == Some(&fid) => {
+                    dc.set_id(vid, cid, &fid);
+                    Ok(true)
+                }
+                // A concurrent upload won (or GC took it meanwhile: the commit will ask again).
+                _ => {
+                    let _ = dc.d.delete(&fid);
+                    Ok(false)
+                }
+            },
+            // Outcome unknown: keep the file; prune sweeps it if no pointer names it.
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn get_chunk_drive(&self, dc: &DriveChunks, vid: &Id16, cid: &Cid) -> R<Vec<u8>> {
+        let name = self.chunk_name(vid, cid);
+        for attempt in 0..2 {
+            let cached = if attempt == 0 { dc.id(vid, cid) } else { None };
+            let fid = match cached {
+                Some(f) => f,
+                None => {
+                    let Some(o) = self.c.stat(&name)? else {
+                        dc.forget_id(vid, cid);
+                        return Err(SErr::NoChunk);
+                    };
+                    match o.metadata.get("d") {
+                        Some(f) if gdrive::id_ok(f) => {
+                            dc.set_id(vid, cid, f);
+                            f.clone()
+                        }
+                        Some(_) => return Err(SErr::Internal(format!("{name}: bad Drive file id"))),
+                        // Bytes in the bucket (stored before Drive was enabled).
+                        None => {
+                            return match self.c.get(&name, None)? {
+                                Some((b, _)) => Ok(b),
+                                None => Err(SErr::NoChunk),
+                            }
+                        }
+                    }
+                }
+            };
+            if let Some(b) = dc.d.download(&fid)? {
+                if blake3::hash(&b).as_bytes() != cid {
+                    return Err(SErr::Internal(format!("Drive file {fid}: content does not match chunk {}", hex(cid))));
+                }
+                return Ok(b);
+            }
+            // Stale cache (chunk collected and uploaded again), or the file is gone.
+            dc.forget_id(vid, cid);
+        }
+        Err(SErr::Internal(format!(
+            "vault {} chunk {}: Drive file missing (deleted in Drive?)",
+            hex(vid),
+            hex(cid)
+        )))
+    }
+
+    /// Delete Drive files no pointer names (lost upload replies, lost races, failed deletes) once
+    /// older than max(grace, ORPHAN_MIN_AGE). Lists Drive first, then pointers: a file listed
+    /// has had its pointer inserted by then unless its upload stalled for longer than that age.
+    fn sweep_drive(&self, dc: &DriveChunks, vid: &Id16) -> R<u64> {
+        let min_age = self.grace.max(ORPHAN_MIN_AGE).as_millis() as i64;
+        let reg_pfx = format!("{}drive/", self.vbase(vid));
+        let now = now_ms();
+        let mut old: Vec<DFile> = Vec::new();
+        for o in self.c.list(&reg_pfx, None)? {
+            if o.name.strip_prefix(&reg_pfx) == Some("vault") {
+                continue;
+            }
+            let Some(fid) = o.metadata.get("id").filter(|i| gdrive::id_ok(i)) else {
+                continue;
+            };
+            old.extend(dc.d.list_children(fid)?.into_iter().filter(|f| now - f.created_ms >= min_age));
+        }
+        if old.is_empty() {
+            return Ok(0);
+        }
+        let live: HashSet<String> = self
+            .c
+            .list(&self.chunk_prefix(vid), None)?
+            .into_iter()
+            .filter_map(|o| o.metadata.get("d").cloned())
+            .collect();
+        let orphans: Vec<&DFile> = old.iter().filter(|f| !live.contains(&f.id)).collect();
+        let mut n = 0;
+        for r in par_map(&orphans, |f| dc.d.delete(&f.id)) {
+            if r? {
+                n += 1;
+            }
+        }
+        Ok(n)
     }
 }
 
@@ -1036,6 +1221,19 @@ impl Store for GcsStore {
             }
         }
         self.usage_add(&v, len, 1);
+        if let Some(dc) = &self.drive {
+            return match self.put_chunk_drive(dc, vid, cid, data) {
+                Ok(true) => Ok(()),
+                Ok(false) => {
+                    self.usage_add(&v, -len, -1);
+                    Ok(())
+                }
+                Err(e) => {
+                    self.usage_add(&v, -len, -1);
+                    Err(e)
+                }
+            };
+        }
         match self.c.insert(&name, data, 0, &[]) {
             Ok(_) => Ok(()),
             Err(GErr::Precondition) => {
@@ -1053,6 +1251,9 @@ impl Store for GcsStore {
     fn get_chunk(&self, vid: &Id16, key: &[u8; 32], cid: &Cid) -> R<Vec<u8>> {
         let v = self.vault(vid)?;
         self.check_key(vid, &v, key)?;
+        if let Some(dc) = &self.drive {
+            return self.get_chunk_drive(dc, vid, cid);
+        }
         match self.c.get(&self.chunk_name(vid, cid), None)? {
             Some((b, _)) => Ok(b),
             None => Err(SErr::NoChunk),
@@ -1146,7 +1347,7 @@ impl Store for GcsStore {
             .collect();
 
         // Phase 3 (lock): re-list the log, spare refs of later records, conditional delete.
-        let (chunks, bytes) = {
+        let (chunks, bytes, files) = {
             let mut st = lock(&v.st);
             self.sync(vid, &mut st, false)?;
             let mut late = HashSet::new();
@@ -1154,20 +1355,36 @@ impl Store for GcsStore {
             self.refs_of(vid, &mut st, &seqs, &mut late)?;
             let del: Vec<&(Cid, Obj)> = cands.iter().filter(|(c, _)| !late.contains(c)).collect();
             let res = par_map(&del, |(_, o)| self.c.delete(&o.name, Some(o.metagen)));
-            let (mut n, mut b) = (0u64, 0u64);
-            for ((_, o), r) in del.iter().zip(res) {
+            let (mut n, mut b, mut files) = (0u64, 0u64, Vec::new());
+            for ((cid, o), r) in del.iter().zip(res) {
                 match r {
                     Ok(true) => {
                         n += 1;
-                        b += o.size;
+                        b += chunk_bytes(o);
+                        if let Some(d) = o.metadata.get("d").filter(|d| gdrive::id_ok(d)) {
+                            files.push((*cid, d.clone()));
+                        }
                     }
                     Ok(false) | Err(GErr::Precondition) => {} // gone, or touched since listing
                     Err(e) => return Err(e.into()),
                 }
             }
-            (n, b)
+            (n, b, files)
         };
         self.usage_add(&v, -(bytes as i64), -(chunks as i64));
+        if let Some(dc) = &self.drive {
+            // Pointers are gone, so these files are unreachable; a failed delete is swept later.
+            par_map(&files, |(cid, d)| {
+                dc.forget_id(vid, cid);
+                let _ = dc.d.delete(d);
+            });
+            match self.sweep_drive(dc, vid) {
+                Ok(0) => {}
+                Ok(n) => eprintln!("vaultaged: vault {}: deleted {n} unreferenced Drive files", hex(vid)),
+                Err(SErr::Unavailable(m) | SErr::Internal(m)) => eprintln!("vaultaged: vault {}: Drive sweep: {m}", hex(vid)),
+                Err(_) => {}
+            }
+        }
         Ok(PruneResp { records, chunks, bytes })
     }
 

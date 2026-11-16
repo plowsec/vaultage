@@ -18,6 +18,8 @@ Storage: local filesystem (default) or a GCS bucket (`--store gcs://…`, see (d
 | — | `VAULTAGE_ENROLL_TOKEN` (value) | none |
 | `--gc-grace-secs <n>` | `VAULTAGE_GC_GRACE_SECS` | `86400` |
 | `--vault-quota-bytes <n>` | `VAULTAGE_VAULT_QUOTA_BYTES` | none (unlimited) |
+| `--chunks <bucket\|gdrive://folder-id>` | `VAULTAGE_CHUNKS` | `bucket`; Drive needs a gcs store, see (f) |
+| — | `VAULTAGE_GDRIVE_CLIENT_ID`, `VAULTAGE_GDRIVE_CLIENT_SECRET`, `VAULTAGE_GDRIVE_REFRESH_TOKEN` | none; required with Drive |
 | — | `VAULTAGE_GCS_TOKEN` | none → metadata-server token |
 | — | `VAULTAGE_GCS_ENDPOINT` / `STORAGE_EMULATOR_HOST` | `https://storage.googleapis.com`; set = no auth unless `VAULTAGE_GCS_TOKEN` |
 
@@ -200,19 +202,20 @@ docker buildx build --platform linux/amd64 -f deploy/Dockerfile -t $IMG --push .
 
 # Deploy.
 gcloud run deploy vaultaged --image $IMG --region $REGION \
-  --service-account $SA_EMAIL --allow-unauthenticated \
+  --service-account $SA_EMAIL --no-invoker-iam-check \
   --port 8787 --max-instances 1 --min-instances 0 --cpu-boost \
   --memory 512Mi --timeout 300 \
   --set-env-vars VAULTAGE_STORE=gcs://$BUCKET/vaultage \
   --set-secrets VAULTAGE_ENROLL_TOKEN=vaultage-enroll-token:latest
 URL=$(gcloud run services describe vaultaged --region $REGION --format='value(status.url)')
-curl -fsS $URL/healthz   # → ok
+curl -sS $URL/v1/vaults/00000000000000000000000000000000/header   # → {"error":"no such vault"}
 ```
 
 | Item | Note |
 |---|---|
 | Auth to GCS | metadata-server token of `--service-account`; nothing to configure |
-| `--allow-unauthenticated` | required: clients sign requests themselves; Cloud Run IAM would reject them |
+| `--no-invoker-iam-check` | required: clients sign requests themselves (`Authorization: Coffer …`). `--allow-unauthenticated` is not enough: the IAM check still rejects a non-`Bearer` Authorization header with 401 "lacked OIDC mandated 'Bearer' prefix" |
+| `/healthz` | reserved by Cloud Run (Google 404 page); probe any API path instead, as above |
 | `--max-instances 1` | recommended. Correctness with 2+ instances relies on GCS preconditions; then also: rate limits and quota are per instance, a rekey reaches other instances' auth cache within 2 s, GC safety needs grace > 0 |
 | `--min-instances 0` | scales to zero; first request after idle pays a cold start (`--cpu-boost` helps) |
 | Custom domain | `gcloud beta run domain-mappings create --service vaultaged --domain vault.example.com --region $REGION` (not in all regions), or an external Application Load Balancer + serverless NEG |
@@ -255,3 +258,60 @@ Pin: `vaultage trust https://<host> --ca cert.pem` · iOS: Certificate Pinning (
 | Tailscale disconnected | sync shows offline; edits queue in the encrypted journal; pushed when the tailnet is back |
 | Wrong network answers (captive portal, proxy) | certificate check fails; nothing is sent; app shows "identity couldn't be verified" |
 | Link stalls mid-transfer | request fails after 20 s without progress; only missing chunks are re-sent |
+
+## (f) Cloud Run + GCS bucket + Google Drive for chunk bytes
+
+Same as (d), but chunk bytes (the bulk) go to a folder in your Google Drive. Storage is billed by your Google One plan, not GCS.
+**Drive backend: tested against an in-process fake and one live deployment. Trial it with non-critical data first.**
+
+| Where | What |
+|---|---|
+| GCS bucket | meta, record log, one empty pointer object per chunk (`d`=Drive file id, `n`=size), Drive folder ids. Small |
+| Drive folder | `<vault id>/<0-f>/<chunk hash>`: encrypted chunks, written once, never changed |
+
+Google sees what any server operator sees (ciphertext, sizes, counts, times). See docs/SECURITY.md.
+
+One-time OAuth setup (Cloud console, same project; `gcloud` can't create these):
+
+1. `gcloud services enable drive.googleapis.com`
+2. Google Auth Platform → Branding/Audience: External, add your account. **Publish to "In production"**: in "Testing", refresh tokens expire after 7 days. `drive.file` is a non-sensitive scope, so no verification review (per Google's docs, check).
+3. Clients → Create client → type **Desktop app** → client id + secret.
+
+On your workstation (opens a consent page; the account picked owns the storage):
+
+```sh
+export VAULTAGE_GDRIVE_CLIENT_ID=… VAULTAGE_GDRIVE_CLIENT_SECRET=…
+vaultaged gdrive-login | gcloud secrets create vaultage-gdrive-refresh --data-file=-   # stderr prints --chunks gdrive://<folder-id>
+printf %s "$VAULTAGE_GDRIVE_CLIENT_SECRET" | gcloud secrets create vaultage-gdrive-secret --data-file=-
+for s in vaultage-gdrive-refresh vaultage-gdrive-secret; do
+  gcloud secrets add-iam-policy-binding $s --member=serviceAccount:$SA_EMAIL --role=roles/secretmanager.secretAccessor
+done
+```
+
+Deploy (after the bucket, service account and image steps of (d)):
+
+```sh
+FOLDER=<folder-id from gdrive-login>
+gcloud run deploy vaultaged --image $IMG --region $REGION \
+  --service-account $SA_EMAIL --no-invoker-iam-check \
+  --port 8787 --max-instances 1 --min-instances 0 --cpu-boost \
+  --memory 512Mi --timeout 300 \
+  --set-env-vars VAULTAGE_STORE=gcs://$BUCKET/vaultage,VAULTAGE_CHUNKS=gdrive://$FOLDER,VAULTAGE_GDRIVE_CLIENT_ID=$VAULTAGE_GDRIVE_CLIENT_ID \
+  --set-secrets VAULTAGE_ENROLL_TOKEN=vaultage-enroll-token:latest,VAULTAGE_GDRIVE_CLIENT_SECRET=vaultage-gdrive-secret:latest,VAULTAGE_GDRIVE_REFRESH_TOKEN=vaultage-gdrive-refresh:latest
+gcloud run services logs read vaultaged --region $REGION --limit 20   # "chunks in Drive folder …"
+```
+
+| Item | Note |
+|---|---|
+| Scope | `drive.file`: the server sees only files it created. The folder must come from `gdrive-login`, not the Drive UI |
+| Several instances | safe: every decision is a GCS precondition; Drive only stores immutable files |
+| Startup | refuses to start if the folder is missing or not visible to the client; starts (with a warning) if Drive is unreachable |
+| Refresh token revoked/expired | chunk reads and writes return 503; log says `invalid_grant`. Fix: `vaultaged gdrive-login --no-folder`, new secret version, redeploy (same client: the old folder stays visible) |
+| Drive full | chunk PUT → 507 |
+| Lost upload replies, lost races | leave unreferenced Drive files; each prune deletes those older than max(grace, 15 min) |
+| Prune / empty trash | deletes pointer, then the Drive file, permanently (no Drive trash) |
+| Don't | delete, trash or edit files in the folder. Moving or renaming the folder is fine (ids) |
+| Limits | 750 GB upload per day per Google account; ≤ 5 MB per upload (chunks are ≤ 4 MiB) |
+| Existing (d) deployment | add `VAULTAGE_CHUNKS`: old chunks stay in the bucket and stay readable; new chunks go to Drive. No migration tool |
+| Backups | bucket as in (d), plus the Drive folder (Google Takeout or `rclone`). Both are ciphertext; you need both |
+| Erasure caveat | Drive's own retention/backups of deleted files are Google's business |

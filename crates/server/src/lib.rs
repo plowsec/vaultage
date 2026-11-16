@@ -1,6 +1,7 @@
 //! Vaultage server: zero-knowledge store for encrypted chunks and an append-only record log.
 
 mod api;
+pub mod gdrive_login;
 mod ratelimit;
 mod store;
 
@@ -27,6 +28,40 @@ pub struct GcsConfig {
     pub endpoint: Option<String>,
     /// Static bearer token. If unset: none when `endpoint` is set, else the metadata server.
     pub token: Option<String>,
+    /// Chunk bytes in Google Drive instead of the bucket (the bucket keeps a pointer per chunk).
+    pub drive: Option<Box<DriveConfig>>,
+}
+
+/// Google Drive as chunk storage. Auth: `token`, else the refresh-token trio, else none if
+/// `endpoint` is set (fake), else an error.
+#[derive(Clone, Default)]
+pub struct DriveConfig {
+    /// Folder id. Must be created by this OAuth client (`drive.file` sees only its own files).
+    pub folder: String,
+    /// API base override (fake). Default https://www.googleapis.com.
+    pub endpoint: Option<String>,
+    /// Token endpoint override. Default https://oauth2.googleapis.com/token.
+    pub token_url: Option<String>,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    pub refresh_token: Option<String>,
+    /// Static bearer token (tests).
+    pub token: Option<String>,
+}
+
+impl std::fmt::Debug for DriveConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let red = |o: &Option<String>| o.as_ref().map(|_| "<redacted>");
+        f.debug_struct("DriveConfig")
+            .field("folder", &self.folder)
+            .field("endpoint", &self.endpoint)
+            .field("token_url", &self.token_url)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &red(&self.client_secret))
+            .field("refresh_token", &red(&self.refresh_token))
+            .field("token", &red(&self.token))
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for GcsConfig {
@@ -36,6 +71,7 @@ impl std::fmt::Debug for GcsConfig {
             .field("prefix", &self.prefix)
             .field("endpoint", &self.endpoint)
             .field("token", &self.token.as_ref().map(|_| "<redacted>"))
+            .field("drive", &self.drive)
             .finish()
     }
 }

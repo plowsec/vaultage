@@ -6,6 +6,7 @@
 
 pub mod fs;
 pub mod gcs;
+pub mod gdrive;
 pub mod invites;
 
 use std::time::{SystemTime, UNIX_EPOCH};

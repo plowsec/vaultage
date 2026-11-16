@@ -334,7 +334,7 @@ fn header_cas(k: Kind) {
 fn concurrent_commit_race(k: Kind) {
     let (_env, h, c) = setup(k, "race");
     let e = id_hex("contended", 16);
-    let n = if k == Kind::Gcs { 25 } else { 50 };
+    let n = if k != Kind::Fs { 25 } else { 50 };
     let wins: Vec<u64> = std::thread::scope(|s| {
         let hs: Vec<_> = (0..2)
             .map(|t| {
@@ -464,7 +464,7 @@ fn path_traversal_rejected(k: Kind) {
                 .collect();
             assert_eq!(names, vec![std::ffi::OsString::from(&c.vid)]);
         }
-        Kind::Gcs => {
+        Kind::Gcs | Kind::GcsDrive => {
             let names = env.fake().names("");
             assert!(!names.is_empty());
             let ours = format!("{PREFIX}vaults/{}/", c.vid);

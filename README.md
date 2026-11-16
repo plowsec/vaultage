@@ -61,6 +61,7 @@ Production: TLS in front (Caddy, or `tailscale serve` for a tailnet-only server)
 | `--store fs` / `gcs://bucket[/prefix]` | `fs` | where state lives |
 | `--gc-grace-secs` | 86400 | how long an unreferenced chunk survives after a purge |
 | `--vault-quota-bytes` | none | per-vault chunk storage limit (507 when full) |
+| `--chunks bucket` / `gdrive://<folder-id>` | `bucket` | with a GCS store: chunk bytes in Google Drive, the bucket keeps the log and a pointer per chunk. See `deploy/README.md` (f) |
 
 ## CLI
 
@@ -121,12 +122,13 @@ Second Mac: Join Existing Vault → server URL + vault ID + passphrase or recove
 | Key rotation, revoked device, adopting device, invites (once only, revoke, expiry, rotation, old-style), local→synced | `crates/server/tests/features.rs` over real HTTP; invites also on the GCS store across two instances (`client_gcs.rs`) |
 | Server (filesystem store) | API tests: commits, races, restart, torn log, prune/GC, rekey, quota, rate limits |
 | Server (GCS store, for Cloud Run) | same API tests against an in-process fake GCS, two-instance races, lost replies, outages; client fuzz on top. Never run against real GCS |
+| Server (GCS store + Drive chunks) | all API and GC tests again with a fake Drive; Drive-only tests (`crates/server/tests/gdrive.rs`): two-instance races, lost replies, orphan sweep, outages, rate limits, full Drive, token refresh, bucket chunks from before, `gdrive-login`; client fuzz on top |
 | CLI | two-device runs against a local server, incl. prune, empty-trash, rotate, adopt, invite |
 | App logic | headless self-test through the app's Swift client (`app/.build/release/vaultage-selftest`), incl. Touch ID slot, rotation, purge, in-memory media; with `VAULTAGE_TEST_URL`/`VAULTAGE_TEST_TOKEN` also attach, invite/join, rotate/adopt on a second process |
 | App UI | driven by hand on test data: unlock, browse, previews (image, text, audio), thumbnails, versions, restore, new vault, recovery key, lock, live sync, empty trash, vault settings + usage, invite, key rotation |
 | Hardened runtime | signed build blocks `DYLD_INSERT_LIBRARIES`; unsigned build does not |
 
-Not exercised in the UI (logic is covered above): anything typed into a password field (passphrase, recovery key, enrollment token, invite), a real Touch ID prompt, Add Files panel and Finder drag-and-drop, Export / Move Out, Open With / external editing, the rotated-elsewhere and unfinished-rotation banners, auto-lock timers, audio playback (the player loads; I did not play sound). Not run at all: compose stack with real TLS, systemd unit, `gcloud` commands, a real GCS bucket.
+Not exercised in the UI (logic is covered above): anything typed into a password field (passphrase, recovery key, enrollment token, invite), a real Touch ID prompt, Add Files panel and Finder drag-and-drop, Export / Move Out, Open With / external editing, the rotated-elsewhere and unfinished-rotation banners, auto-lock timers, audio playback (the player loads; I did not play sound). Run live once (2026-11-16): deploy (f) on Cloud Run + GCS + Drive, `gdrive-login` consent; a 9 MB file and a note synced between two devices. Not yet seen live: prune deleting Drive files. Not run at all: compose stack with real TLS, systemd unit.
 
 ## Not done
 

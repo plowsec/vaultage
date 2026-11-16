@@ -5,6 +5,7 @@
 | Attacker | Gets | Does not get |
 |---|---|---|
 | Server operator, cloud provider, stolen server disk | ciphertext; vault id; record count, timing; chunk sizes (padded); which chunks belong to one record | names, content, folder structure, keys |
+| Google, with Drive chunks (`--chunks gdrive://`) | same as server: chunk files named by content hash, sizes, times, count; folders named by vault id | same |
 | Network attacker (TLS broken) | same as server | same |
 | Malicious server | can withhold new data, refuse service | cannot forge, alter, reorder, drop or roll back records unnoticed (see Integrity) |
 | Stolen Mac, powered off / vault locked | ciphertext; Argon2id-wrapped key if a passphrase is set | Secure Enclave key (needs your finger + that chip) |

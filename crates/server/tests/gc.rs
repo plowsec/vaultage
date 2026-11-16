@@ -190,7 +190,7 @@ fn gc_grace_period(k: Kind) {
 /// either fail with 422 or leave the chunk in place.
 fn commit_vs_gc_race(k: Kind) {
     let (_env, h, c) = setup(k, "gcrace");
-    let iters = if k == Kind::Gcs { 60 } else { 200 };
+    let iters = if k != Kind::Fs { 60 } else { 200 };
     // Sweep the commit's start across the (previous) prune's duration.
     let t0 = std::time::Instant::now();
     c.prune(&[]);

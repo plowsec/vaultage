@@ -129,7 +129,7 @@ fn find(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
 }
 
 /// multipart/related: JSON metadata part, then media part.
-fn parse_multipart(ctype: &str, body: &[u8]) -> Option<(Value, Vec<u8>)> {
+pub fn parse_multipart(ctype: &str, body: &[u8]) -> Option<(Value, Vec<u8>)> {
     let b = ctype.split("boundary=").nth(1)?.trim_matches('"');
     let delim = format!("--{b}");
     let p1 = find(body, delim.as_bytes(), 0)?;

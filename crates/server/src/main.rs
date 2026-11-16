@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use vaultage_server::{Config, StoreKind};
+use vaultage_server::{gdrive_login, Config, DriveConfig, StoreKind};
 
 const USAGE: &str = "usage: vaultaged [options]
+       vaultaged gdrive-login [--folder-name <name> | --no-folder]
   --data <dir>               FS store dir (env VAULTAGE_DATA, default ./data)
   --store <fs|gcs://bucket[/prefix]>
                              storage backend (env VAULTAGE_STORE, default fs)
@@ -13,9 +14,15 @@ const USAGE: &str = "usage: vaultaged [options]
   --gc-grace-secs <n>        unreferenced chunks younger than this survive prune
                              (env VAULTAGE_GC_GRACE_SECS, default 86400)
   --vault-quota-bytes <n>    per-vault chunk byte limit (env VAULTAGE_VAULT_QUOTA_BYTES, default none)
+  --chunks <bucket|gdrive://folder-id>
+                             where chunk bytes go with a gcs store (env VAULTAGE_CHUNKS, default bucket)
 GCS env: VAULTAGE_GCS_TOKEN (static bearer token), VAULTAGE_GCS_ENDPOINT or STORAGE_EMULATOR_HOST
 (API base URL; auth skipped unless VAULTAGE_GCS_TOKEN). Default auth: metadata server.
-Old VAULTAGE_* names still work. Without an enrollment token, vault creation is disabled.";
+Drive env: VAULTAGE_GDRIVE_CLIENT_ID, VAULTAGE_GDRIVE_CLIENT_SECRET, VAULTAGE_GDRIVE_REFRESH_TOKEN;
+VAULTAGE_GDRIVE_ENDPOINT, VAULTAGE_GDRIVE_TOKEN_URL, VAULTAGE_GDRIVE_TOKEN (fakes/tests).
+gdrive-login: one-time consent in a browser (needs the client id and secret); creates the folder
+(default name Vaultage), prints the refresh token on stdout and the --chunks value on stderr.
+Old COFFER_* names still work. Without an enrollment token, vault creation is disabled.";
 
 struct Args {
     data: PathBuf,
@@ -24,9 +31,10 @@ struct Args {
     store: String,
     grace: u64,
     quota: Option<u64>,
+    chunks: String,
 }
 
-/// `VAULTAGE_<k>`, else the pre-rename `VAULTAGE_<k>`. Empty counts as unset.
+/// `VAULTAGE_<k>`, else the pre-rename `COFFER_<k>`. Empty counts as unset.
 fn env(k: &str) -> Option<String> {
     vaultage_core::env_var(k).filter(|v| !v.is_empty())
 }
@@ -45,6 +53,7 @@ fn parse_args() -> Result<Args, String> {
         quota: env("VAULT_QUOTA_BYTES")
             .map(|v| num("VAULTAGE_VAULT_QUOTA_BYTES", &v))
             .transpose()?,
+        chunks: env("CHUNKS").unwrap_or_else(|| "bucket".into()),
     };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
@@ -69,6 +78,7 @@ fn parse_args() -> Result<Args, String> {
             "--store" => a.store = val()?,
             "--gc-grace-secs" => a.grace = num(&name, &val()?)?,
             "--vault-quota-bytes" => a.quota = Some(num(&name, &val()?)?),
+            "--chunks" => a.chunks = val()?,
             _ => return Err(format!("unknown argument: {flag}")),
         }
     }
@@ -105,8 +115,89 @@ async fn shutdown_signal() {
     eprintln!("vaultaged: shutting down");
 }
 
+/// Trimmed: secrets mounted from files or Secret Manager often end in a newline.
+fn secret(k: &str) -> Option<String> {
+    env(k).map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
+}
+
+/// `bucket` → None, `gdrive://<folder id>` → Drive config from the environment.
+fn parse_chunks(s: &str) -> Result<Option<DriveConfig>, String> {
+    if s == "bucket" {
+        return Ok(None);
+    }
+    let folder = s
+        .strip_prefix("gdrive://")
+        .ok_or(format!("bad --chunks {s:?}: want bucket or gdrive://<folder-id>"))?
+        .trim_matches('/');
+    Ok(Some(DriveConfig {
+        folder: folder.to_owned(),
+        endpoint: secret("GDRIVE_ENDPOINT"),
+        token_url: secret("GDRIVE_TOKEN_URL"),
+        client_id: secret("GDRIVE_CLIENT_ID"),
+        client_secret: secret("GDRIVE_CLIENT_SECRET"),
+        refresh_token: secret("GDRIVE_REFRESH_TOKEN"),
+        token: secret("GDRIVE_TOKEN"),
+    }))
+}
+
+fn gdrive_login_main(args: &[String]) -> ExitCode {
+    let mut name = Some("Vaultage".to_owned());
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "-h" | "--help" => {
+                println!("{USAGE}");
+                return ExitCode::SUCCESS;
+            }
+            "--no-folder" => name = None,
+            "--folder-name" => match it.next() {
+                Some(v) => name = Some(v.clone()),
+                None => {
+                    eprintln!("vaultaged: --folder-name needs a value");
+                    return ExitCode::from(2);
+                }
+            },
+            _ => {
+                eprintln!("vaultaged: unknown argument: {a}\n{USAGE}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let (Some(client_id), Some(client_secret)) = (secret("GDRIVE_CLIENT_ID"), secret("GDRIVE_CLIENT_SECRET")) else {
+        eprintln!("vaultaged: set VAULTAGE_GDRIVE_CLIENT_ID and VAULTAGE_GDRIVE_CLIENT_SECRET (OAuth client, type Desktop app)");
+        return ExitCode::from(2);
+    };
+    let opts = gdrive_login::Opts {
+        client_id,
+        client_secret,
+        folder_name: name,
+        ..Default::default()
+    };
+    let out = gdrive_login::login(&opts, |url| {
+        eprintln!("Open this URL in a browser signed in to the Google account whose Drive will hold the chunks:\n\n{url}\n\nWaiting for the redirect...");
+    });
+    match out {
+        Ok(o) => {
+            println!("{}", o.refresh_token);
+            eprintln!("\nDone. stdout: the refresh token (store it as VAULTAGE_GDRIVE_REFRESH_TOKEN).");
+            if let (Some(id), Some(n)) = (&o.folder_id, &opts.folder_name) {
+                eprintln!("Folder {n:?} created: --chunks gdrive://{id}");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("vaultaged: gdrive-login: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.first().map(String::as_str) == Some("gdrive-login") {
+        return tokio::task::block_in_place(|| gdrive_login_main(&argv[1..]));
+    }
     let args = match parse_args() {
         Ok(a) => a,
         Err(e) => {
@@ -121,13 +212,29 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let drive = match parse_chunks(&args.chunks) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("vaultaged: {e}");
+            return ExitCode::from(2);
+        }
+    };
     let where_ = match &mut store {
+        StoreKind::Fs if drive.is_some() => {
+            eprintln!("vaultaged: --chunks gdrive://… needs --store gcs://…");
+            return ExitCode::from(2);
+        }
         StoreKind::Fs => format!("data {}", args.data.display()),
         StoreKind::Gcs(g) => {
             g.endpoint = env("GCS_ENDPOINT").or_else(|| std::env::var("STORAGE_EMULATOR_HOST").ok().filter(|v| !v.is_empty()));
             g.token = env("GCS_TOKEN");
+            let chunks = match &drive {
+                Some(d) => format!(", chunks in Drive folder {}", d.folder),
+                None => String::new(),
+            };
+            g.drive = drive.map(Box::new);
             format!(
-                "store gcs://{}/{} via {}",
+                "store gcs://{}/{} via {}{chunks}",
                 g.bucket,
                 g.prefix,
                 g.endpoint.as_deref().unwrap_or("storage.googleapis.com")

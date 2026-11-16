@@ -1,6 +1,7 @@
 //! Shared test helpers: HTTP client, signed requests, per-backend environments.
 #![allow(dead_code)]
 
+pub mod fake_drive;
 pub mod fake_gcs;
 
 use std::io::{Read, Write};
@@ -10,10 +11,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use vaultage_core::hexutil;
 use vaultage_core::proto::{sign_request, ENROLL_HEADER};
-use vaultage_server::{spawn, Config, GcsConfig, ServerHandle, StoreKind};
+use vaultage_server::{spawn, Config, DriveConfig, GcsConfig, ServerHandle, StoreKind};
 use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
 
+pub use fake_drive::FakeDrive;
 pub use fake_gcs::FakeGcs;
 
 pub const TOKEN: &str = "test-enroll-token";
@@ -23,14 +25,17 @@ pub const PREFIX: &str = "pfx/";
 pub enum Kind {
     Fs,
     Gcs,
+    /// GCS store with chunk bytes in (fake) Google Drive.
+    GcsDrive,
 }
 
-/// Generates `mod fs` and `mod gcs`, each with a #[test] per listed `fn name(Kind)`.
+/// Generates `mod fs`, `mod gcs` and `mod gdrive`, each with a #[test] per listed `fn name(Kind)`.
 #[macro_export]
 macro_rules! both {
     ($($name:ident),* $(,)?) => {
         mod fs { $( #[test] fn $name() { super::$name($crate::common::Kind::Fs) } )* }
         mod gcs { $( #[test] fn $name() { super::$name($crate::common::Kind::Gcs) } )* }
+        mod gdrive { $( #[test] fn $name() { super::$name($crate::common::Kind::GcsDrive) } )* }
     };
 }
 
@@ -43,6 +48,7 @@ pub struct Env {
     pub kind: Kind,
     pub dir: tempfile::TempDir,
     pub fake: Option<FakeGcs>,
+    pub drive: Option<FakeDrive>,
 }
 
 impl Env {
@@ -50,12 +56,30 @@ impl Env {
         Env {
             kind,
             dir: tempfile::tempdir().unwrap(),
-            fake: (kind == Kind::Gcs).then(FakeGcs::start),
+            fake: (kind != Kind::Fs).then(FakeGcs::start),
+            drive: (kind == Kind::GcsDrive).then(FakeDrive::start),
         }
     }
 
     pub fn fake(&self) -> &FakeGcs {
         self.fake.as_ref().expect("gcs env")
+    }
+
+    pub fn drive(&self) -> &FakeDrive {
+        self.drive.as_ref().expect("gdrive env")
+    }
+
+    /// Server-side Drive config for the fake (refresh-token auth, like production).
+    pub fn drive_config(&self) -> Option<DriveConfig> {
+        self.drive.as_ref().map(|d| DriveConfig {
+            folder: fake_drive::ROOT.into(),
+            endpoint: Some(d.endpoint()),
+            token_url: Some(format!("{}/token", d.endpoint())),
+            client_id: Some(fake_drive::CLIENT_ID.into()),
+            client_secret: Some(fake_drive::CLIENT_SECRET.into()),
+            refresh_token: Some(fake_drive::REFRESH.into()),
+            token: None,
+        })
     }
 
     pub fn config(&self, token: Option<&str>) -> Config {
@@ -69,6 +93,7 @@ impl Env {
                     prefix: PREFIX.into(),
                     endpoint: Some(f.endpoint()),
                     token: None,
+                    drive: self.drive_config().map(Box::new),
                 }),
             },
             gc_grace_secs: 0,
@@ -93,11 +118,27 @@ impl Env {
     pub fn chunk_exists(&self, vid: &str, cid: &str) -> bool {
         match self.kind {
             Kind::Fs => self.vault_dir(vid).join("chunks").join(&cid[..2]).join(cid).exists(),
-            Kind::Gcs => !self
+            Kind::Gcs | Kind::GcsDrive => !self
                 .fake()
                 .names(&format!("{PREFIX}vaults/{vid}/chunks/{cid}"))
                 .is_empty(),
         }
+    }
+
+    /// Drive file ids named by the vault's chunk pointers (GcsDrive).
+    pub fn pointed_files(&self, vid: &str) -> Vec<String> {
+        let p = format!("{PREFIX}vaults/{vid}/chunks/");
+        self.fake()
+            .names(&p)
+            .iter()
+            .map(|n| {
+                self.fake().with_obj(n, |o| {
+                    let o = o.unwrap();
+                    assert!(o.data.is_empty(), "{n}: pointer holds bytes");
+                    o.metadata.get("d").unwrap_or_else(|| panic!("{n}: no Drive id")).clone()
+                })
+            })
+            .collect()
     }
 
     pub fn chunk_count(&self, vid: &str) -> usize {
@@ -111,6 +152,14 @@ impl Env {
                 })
                 .sum(),
             Kind::Gcs => self.fake().names(&format!("{PREFIX}vaults/{vid}/chunks/")).len(),
+            Kind::GcsDrive => {
+                // Every pointer names a live Drive file: a dangling one would be data loss.
+                let ids = self.pointed_files(vid);
+                for id in &ids {
+                    assert!(self.drive().exists(id), "pointer to missing Drive file {id}");
+                }
+                ids.len()
+            }
         }
     }
 
@@ -127,7 +176,10 @@ impl Env {
                     }
                 }
             }
-            Kind::Gcs => {
+            Kind::Gcs | Kind::GcsDrive => {
+                if let Some(d) = &self.drive {
+                    d.age(secs);
+                }
                 let objs = &mut *self.fake().state.objs.lock().unwrap();
                 let p = format!("{PREFIX}vaults/{vid}/chunks/");
                 for (k, o) in objs.iter_mut() {
@@ -159,6 +211,11 @@ impl Env {
                 v
             }
             Kind::Gcs => self.fake().all_bytes(),
+            Kind::GcsDrive => {
+                let mut v = self.fake().all_bytes();
+                v.extend(self.drive().all_bytes());
+                v
+            }
         }
     }
 }

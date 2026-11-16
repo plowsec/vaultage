@@ -1,4 +1,5 @@
-//! The real client stack against a server whose storage is the (fake) GCS backend.
+//! The real client stack against a server whose storage is the (fake) GCS backend,
+//! with and without chunk bytes in (fake) Drive.
 
 mod common;
 
@@ -17,6 +18,22 @@ use common::{Env, Kind, TOKEN};
 fn fuzz_on_gcs_backend() {
     for (seed, purges) in [(401, false), (402, true), (403, true)] {
         let env = Env::new(Kind::Gcs);
+        let h = env.start();
+        let url = format!("http://{}", h.addr());
+        let registered = AtomicBool::new(false);
+        fuzz_opts(seed, 3, 70, purges, &|v: &Vault| {
+            if !registered.swap(true, Ordering::SeqCst) {
+                create_vault(&url, TOKEN, &v.keys(), &v.portable_header()).unwrap();
+            }
+            Arc::new(HttpRemote::new(&url, &v.id_hex(), v.keys()).unwrap()) as Arc<dyn Remote>
+        });
+    }
+}
+
+#[test]
+fn fuzz_on_gcs_backend_with_drive_chunks() {
+    for (seed, purges) in [(411, true), (412, false)] {
+        let env = Env::new(Kind::GcsDrive);
         let h = env.start();
         let url = format!("http://{}", h.addr());
         let registered = AtomicBool::new(false);
