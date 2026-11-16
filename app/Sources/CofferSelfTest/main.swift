@@ -9,8 +9,8 @@ import CofferKit
 import Foundation
 
 let env0 = ProcessInfo.processInfo.environment
-// VAULTAGE_*, else the pre-rename VAULTAGE_* (the core reads both the same way).
-func envVar(_ k: String) -> String? { env0["VAULTAGE_" + k] ?? env0["VAULTAGE_" + k] }
+// VAULTAGE_*, else the pre-rename COFFER_* (the core reads both the same way).
+func envVar(_ k: String) -> String? { env0["VAULTAGE_" + k] ?? env0["COFFER_" + k] }
 guard let home = envVar("HOME"), !home.isEmpty else {
     FileHandle.standardError.write("set VAULTAGE_HOME to an empty temporary directory\n".data(using: .utf8)!)
     exit(2)

@@ -42,7 +42,7 @@ Options go anywhere after the command; a name or path starting with '-' goes aft
 <vault> is a name or id prefix. Unlock: prompts for the passphrase; --recovery prompts for the
 recovery key. Non-interactive: VAULTAGE_PASSPHRASE or VAULTAGE_RECOVERY_KEY. State: $VAULTAGE_HOME.
 --move deletes the source after the copy is verified (add) / removes from the vault (get).
-rotate: VAULTAGE_NEW_PASSPHRASE, VAULTAGE_YES=1 for scripts. Old VAULTAGE_* names still work.
+rotate: VAULTAGE_NEW_PASSPHRASE, VAULTAGE_YES=1 for scripts. Old COFFER_* names still work.
 ";
 
 fn die(msg: impl std::fmt::Display) -> ! {
