@@ -17,7 +17,7 @@ End-to-end-encrypted file vaults. macOS app, iOS app, CLI, optional zero-knowled
 | iOS app (SwiftUI): files + notes with on-device dictation | separate repository | uses `app/Sources/CofferKit` and `crates/ffi` from here |
 | Deploy (Docker, systemd, GCE) | `deploy/` | see `deploy/README.md` |
 
-Docs: [docs/SECURITY.md](docs/SECURITY.md) (threat model, crypto, limits) · [docs/SYNC.md](docs/SYNC.md) (conflict rules).
+Docs: [docs/SETUP.md](docs/SETUP.md) (set up sync: Drive account, first vault, devices) · [docs/SECURITY.md](docs/SECURITY.md) (threat model, crypto, limits) · [docs/SYNC.md](docs/SYNC.md) (conflict rules).
 
 ## Install (macOS)
 
