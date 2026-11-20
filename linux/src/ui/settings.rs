@@ -38,6 +38,9 @@ pub fn vault_settings(app: &Rc<App>, id: &str) {
     let d = adw::PreferencesDialog::new();
     d.set_title("Vault Settings");
     d.set_search_enabled(false);
+    // Filled in after it opens; a dialog keeps its first size.
+    d.set_content_width(620);
+    d.set_content_height(680);
     OPEN_SETTINGS.with(|o| *o.borrow_mut() = Some((id.to_string(), d.downgrade())));
     refresh_settings(app, &d, id);
     d.present(Some(&app.window));
@@ -366,6 +369,8 @@ fn build(app: &Rc<App>, d: &adw::PreferencesDialog, data: Data) {
     g.add(&r);
     page.add(&g);
     d.add(&page);
+    // Don't land in the name field (typing would rename the vault).
+    d.set_focus(None::<&gtk::Widget>);
 }
 
 fn pin_from_file(app: &Rc<App>, url: &str, id: &str) {

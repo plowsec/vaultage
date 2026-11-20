@@ -301,7 +301,8 @@ impl Browser {
                 me.attach_context(&b, li);
             }
         });
-        name.connect_bind(|_, li| {
+        let me2 = Rc::downgrade(self);
+        name.connect_bind(move |_, li| {
             let li = li.downcast_ref::<gtk::ListItem>().unwrap();
             let (Some(it), Some(b)) = (li.item().and_then(|o| item_of(&o)), li.child().and_downcast::<gtk::Box>()) else { return };
             let icon = b.first_child().and_downcast::<gtk::Image>().unwrap();
@@ -309,7 +310,8 @@ impl Browser {
             let label = icon.next_sibling().and_downcast::<gtk::Label>().unwrap();
             label.set_label(&it.name);
             // Full path only where it adds something (search results from other folders).
-            label.set_tooltip_text((it.path != it.name).then_some(it.path.as_str()));
+            let searching = me2.upgrade().is_some_and(|m| m.is_searching());
+            label.set_tooltip_text(searching.then_some(it.path.as_str()));
             label.next_sibling().unwrap().set_visible(it.pending);
         });
         let col = gtk::ColumnViewColumn::new(Some("Name"), Some(name));
@@ -374,7 +376,8 @@ impl Browser {
             let icon = pic.next_sibling().and_downcast::<gtk::Image>().unwrap();
             let l = icon.next_sibling().and_downcast::<gtk::Label>().unwrap();
             l.set_label(&it.name);
-            b.set_tooltip_text((it.path != it.name || it.name.chars().count() > 28).then_some(it.path.as_str()));
+            let searching = me.upgrade().is_some_and(|m| m.is_searching());
+            b.set_tooltip_text((searching || it.name.chars().count() > 28).then_some(it.path.as_str()));
             icon.set_icon_name(Some(preview::icon_name(&it.name, it.is_dir)));
             let tex = match me.upgrade() {
                 Some(me) => {
@@ -849,6 +852,9 @@ impl Browser {
 
     fn show_status(&self, st: &VaultStatus) {
         let line = logic::sync_line(st);
+        if let Some(act) = self.actions.lookup_action("sync").and_downcast::<gio::SimpleAction>() {
+            act.set_enabled(st.synced);
+        }
         let s = &self.status;
         s.icon.set_icon_name(Some(line.icon));
         s.icon.set_visible(!line.spinning);
@@ -1033,6 +1039,10 @@ impl Browser {
     /// Show decrypted bytes. The buffer is wiped when the texture/text is built.
     fn show_data(&self, it: &Item, data: Zeroizing<Vec<u8>>) {
         let guess = preview::guess(&it.name);
+        if data.is_empty() {
+            self.info(it, "This file is empty.");
+            return;
+        }
         if guess != preview::Guess::Text {
             let bytes = glib::Bytes::from_owned(Zeroizing::new(data.to_vec()));
             if let Ok(t) = gdk::Texture::from_bytes(&bytes) {
@@ -1054,7 +1064,6 @@ impl Browser {
         self.info(it, "No preview for this kind of file. Export it to open it in another app.");
     }
 
-    /// Cached thumbnail, or None while it loads (the cell is rebound when it's ready).
     /// (cache key, texture if ready). An empty key: no thumbnail for this item.
     fn thumbnail(self: &Rc<Self>, it: &Item) -> (String, Option<gdk::Texture>) {
         let show = self.app().map(|a| a.prefs.borrow().show_thumbnails).unwrap_or(false);
