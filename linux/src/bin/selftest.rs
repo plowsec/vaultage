@@ -328,10 +328,13 @@ fn synced(b: &Backend, home: &Path, url: &str, token: &str, cli_bin: &str, local
     check(ok && out == "kept history", "CLI reads the attached vault's file");
 
     // Certificate pinning: set, read, clear.
-    let pem = "-----BEGIN CERTIFICATE-----\nnot a cert\n-----END CERTIFICATE-----\n";
-    check(b.set_pin(url, Some(pem)).is_err(), "a PEM that doesn't parse is refused");
     check(b.pin(url).is_none(), "no pin by default");
+    check(b.set_pin(url, Some("hello")).is_err(), "text that isn't PEM is refused");
+    let pem = "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUYQ==\n-----END CERTIFICATE-----\n";
+    must(b.set_pin(url, Some(pem)), "pin a certificate");
+    check(b.pin(url).is_some_and(|p| p.contains("BEGIN CERTIFICATE")), "pin is stored");
     must(b.set_pin(url, None), "unpin");
+    check(b.pin(url).is_none(), "unpinned");
 
     drop(other);
     drop(third);
