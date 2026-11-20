@@ -335,7 +335,11 @@ fn build(app: &Rc<App>, d: &adw::PreferencesDialog, data: Data) {
     let pending = data.status.as_ref().map(|s| s.rotation_pending).unwrap_or(false);
     let r = row(
         if pending { "Key rotation not finished" } else { "Rotate keys" },
-        &format!("New keys; revokes every passphrase, the recovery key{} on other devices until they enter the new key.", if synced { ", every invite and every other device" } else { "" }),
+        if synced {
+            "New keys. Revokes every passphrase, recovery key and invite; other devices stop syncing until they enter the new key."
+        } else {
+            "New keys. Revokes every passphrase and recovery key."
+        },
     );
     let b = button(if pending { "Finish…" } else { "Rotate Keys…" });
     b.set_sensitive(v.unlocked);
