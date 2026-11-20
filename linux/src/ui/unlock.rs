@@ -32,19 +32,29 @@ impl UnlockPage {
         header.pack_end(&gear);
         root.add_top_bar(&header);
 
+        // Offer what the vault actually has: passphrase first (recovery key behind an expander),
+        // or the recovery key field alone.
         let has_pass = has_passphrase(v);
+        let mac_only = v.slots.iter().any(|s| s.kind == SlotKind::SecureEnclave);
         let group = adw::PreferencesGroup::new();
         let pass = adw::PasswordEntryRow::builder().title("Passphrase").build();
         let recovery = adw::PasswordEntryRow::builder().title("Recovery key").build();
         recovery.add_css_class("monospace");
-        let expander = adw::ExpanderRow::builder().title("Use recovery key…").subtitle("The key you saved when the vault was created.").build();
-        expander.add_row(&recovery);
+        let expander = adw::ExpanderRow::builder().title("Use recovery key…").subtitle("The key you saved when the vault was created or joined.").build();
         if has_pass {
             group.add(&pass);
+            expander.add_row(&recovery);
+            group.add(&expander);
         } else {
-            expander.set_expanded(true);
+            group.set_description(Some("This vault has no passphrase. Enter your recovery key."));
+            group.add(&recovery);
         }
-        group.add(&expander);
+        if mac_only {
+            let l = super::util::dim("Touch ID works only on the Mac that set it up.");
+            l.add_css_class("caption");
+            l.set_margin_top(6);
+            group.add(&l);
+        }
 
         let error = gtk::Label::builder().wrap(true).justify(gtk::Justification::Center).visible(false).build();
         error.add_css_class("error");
@@ -103,7 +113,7 @@ impl UnlockPage {
 
     fn unlock(self: &Rc<Self>, app: &Rc<App>, id: &str) {
         // Recovery key wins if the user opened that field and typed one.
-        let use_recovery = self.expander.is_expanded() && !self.recovery.text().trim().is_empty() || !self.has_pass;
+        let use_recovery = !self.has_pass || self.expander.is_expanded() && !self.recovery.text().trim().is_empty();
         let (kind, secret) = if use_recovery { (SlotKind::Recovery, take_secret(&self.recovery, true)) } else { (SlotKind::Passphrase, take_secret(&self.pass, false)) };
         if secret.is_empty() {
             return;

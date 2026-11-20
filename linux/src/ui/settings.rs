@@ -99,8 +99,15 @@ fn button(label: &str) -> gtk::Button {
 }
 
 fn build(app: &Rc<App>, d: &adw::PreferencesDialog, data: Data) {
-    // Replace the page wholesale.
+    // Replace the page wholesale, but keep the reader where they were: scroll position, and
+    // focus on the row with the same title if there is one.
+    let mut keep_scroll = None;
+    let mut keep_focus = None;
     while let Some(p) = d.visible_page() {
+        if keep_scroll.is_none() {
+            keep_scroll = scroller(&p).map(|sw| sw.vadjustment().value());
+            keep_focus = d.focus().and_then(|f| row_title_of(&f));
+        }
         d.remove(&p);
     }
     let v = &data.v;
@@ -371,7 +378,77 @@ fn build(app: &Rc<App>, d: &adw::PreferencesDialog, data: Data) {
     d.add(&page);
     // Don't land in the name field (typing would rename the vault).
     let d2 = d.clone();
-    glib::idle_add_local_once(move || d2.set_focus(None::<&gtk::Widget>));
+    let page2 = page.clone();
+    glib::idle_add_local_once(move || {
+        let target = keep_focus.as_deref().and_then(|t| find_row(page2.upcast_ref(), t));
+        match target {
+            Some(w) if w.is_focusable() || w.focus_child().is_some() => {
+                w.grab_focus();
+            }
+            _ => d2.set_focus(None::<&gtk::Widget>),
+        }
+    });
+    if let (Some(y), Some(sw)) = (keep_scroll, scroller(&page)) {
+        // The new page has no height yet; set the value once its content is measured.
+        let adj = sw.vadjustment();
+        let done = Rc::new(std::cell::Cell::new(false));
+        let restore = {
+            let done = done.clone();
+            move |a: &gtk::Adjustment| {
+                if !done.get() && a.upper() - a.page_size() >= y {
+                    a.set_value(y);
+                    done.set(true);
+                }
+            }
+        };
+        restore(&adj);
+        adj.connect_changed(move |a| restore(a));
+        glib::timeout_add_local_once(std::time::Duration::from_millis(600), move || done.set(true));
+    }
+}
+
+/// The scrolled window inside a preferences page.
+fn scroller(w: &impl IsA<gtk::Widget>) -> Option<gtk::ScrolledWindow> {
+    let mut c = w.as_ref().first_child();
+    while let Some(x) = c {
+        if let Ok(sw) = x.clone().downcast::<gtk::ScrolledWindow>() {
+            return Some(sw);
+        }
+        if let Some(sw) = scroller(&x) {
+            return Some(sw);
+        }
+        c = x.next_sibling();
+    }
+    None
+}
+
+/// Title of the preferences row that contains `w`.
+fn row_title_of(w: &gtk::Widget) -> Option<String> {
+    let mut c = Some(w.clone());
+    while let Some(x) = c {
+        if let Some(r) = x.downcast_ref::<adw::PreferencesRow>() {
+            return Some(r.title().to_string());
+        }
+        c = x.parent();
+    }
+    None
+}
+
+/// First preferences row with this title under `w`.
+fn find_row(w: &gtk::Widget, title: &str) -> Option<gtk::Widget> {
+    let mut c = w.first_child();
+    while let Some(x) = c {
+        if let Some(r) = x.downcast_ref::<adw::PreferencesRow>() {
+            if r.title() == title {
+                return Some(x);
+            }
+        }
+        if let Some(f) = find_row(&x, title) {
+            return Some(f);
+        }
+        c = x.next_sibling();
+    }
+    None
 }
 
 fn pin_from_file(app: &Rc<App>, url: &str, id: &str) {

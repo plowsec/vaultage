@@ -168,6 +168,8 @@ pub fn new_vault(app: &Rc<App>) {
         bg(move || b.create(&nm, remote.as_ref().map(|(u, t)| (u.as_str(), t)), passphrase.as_ref()), move |r| match r {
             Ok(c) => {
                 let id = c.id.clone();
+                // The vault exists now: show it in the sidebar while the key is on screen.
+                a2.added_vault(&id);
                 let (a3, s4) = (a2.clone(), s3.clone());
                 show_key(
                     &s3,
@@ -283,6 +285,7 @@ pub fn join_vault(app: &Rc<App>) {
                     let id = j.id.clone();
                     match j.recovery {
                         Some(k) => {
+                            a2.added_vault(&id);
                             let label = if nm2.is_empty() { "Vault".to_string() } else { nm2.clone() };
                             let (a3, s4) = (a2.clone(), s3.clone());
                             show_key(
