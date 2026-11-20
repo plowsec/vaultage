@@ -1,6 +1,6 @@
 # Vaultage
 
-End-to-end-encrypted file vaults. macOS app, iOS app, Linux app, CLI, optional zero-knowledge sync server.
+End-to-end-encrypted file vaults. macOS, iOS, Android and Linux apps, CLI, optional zero-knowledge sync server.
 
 - Files are ciphertext on disk, on the wire and on the server. Plaintext exists only in the app's memory.
 - Vaults are local-only or synced. Any number of each.
@@ -16,6 +16,7 @@ End-to-end-encrypted file vaults. macOS app, iOS app, Linux app, CLI, optional z
 | macOS app (SwiftUI) | `app/` | `dist/Vaultage.app` |
 | Linux app (GTK 4 + libadwaita, Rust, own workspace) | `linux/` | `vaultage-gui` |
 | iOS app (SwiftUI): files + notes with on-device dictation | separate repository | uses `app/Sources/CofferKit` and `crates/ffi` from here |
+| Android app (Kotlin, Compose): files, biometric unlock | separate repository | uses `crates/ffi` from here (JNI shim on its side) |
 | Deploy (Docker, systemd, GCE) | `deploy/` | see `deploy/README.md` |
 
 Docs: [docs/SETUP.md](docs/SETUP.md) (set up sync: Drive account, first vault, devices) · [docs/SECURITY.md](docs/SECURITY.md) (threat model, crypto, limits) · [docs/SYNC.md](docs/SYNC.md) (conflict rules).
