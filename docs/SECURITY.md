@@ -130,6 +130,35 @@ Not detectable: a server that simply stops showing new records (looks like "no c
 The app shows the live state (shield icon): hardened runtime, debuggable, SIP.
 Ad-hoc signing gives the runtime protections but not identity: anyone can re-sign a modified copy. Use a Developer ID + notarization for a build you install elsewhere.
 
+## Linux app
+
+| Measure | Effect | Verified here (Ubuntu 24.04 VM) |
+|---|---|---|
+| `harden()` first in `main`: `PR_SET_DUMPABLE=0` | same-uid processes can't `ptrace` it or read `/proc/<pid>/mem`, `maps`, `environ` | `/proc/<pid>/mem` and `maps` open as the same user: denied |
+| `RLIMIT_CORE=0` | no core file with keys | set |
+| `mlock` on 32-byte keys (core) | keys not swapped | `VmLck` non-zero, probe shown in the app |
+| Previews and thumbnails decoded from memory (`gdk::Texture`, `Pixbuf` from a memory stream); buffers zeroed on drop | no plaintext cache, no GNOME thumbnail | marker string imported, previewed, thumbnailed; then grep of `~/.local/share/vaultage`, `~/.cache`, `/tmp`, `/var/tmp`, `/dev/shm`, `/run/user/1000`: only the explicit exports matched |
+| GTK recent files off (`gtk-recent-files-enabled=false`, max age 0) | file choosers don't write `recently-used.xbel` | file empty after import and export |
+| Secrets typed into password rows: read once, row cleared, Rust copy zeroed | short life of passphrase copies | code review; GTK's own entry buffer is not ours to zero |
+| Recovery key / invite → clipboard as a union with `x-kde-passwordManagerHint: secret`; cleared after 60 s if still ours | clipboard managers that honour the hint don't keep it | set; contents not inspected |
+| Lock all on idle (setting, default 10 min), on screen lock and suspend (logind `Lock`, `PrepareForSleep`; `org.gnome.ScreenSaver` / `org.freedesktop.ScreenSaver` `ActiveChanged`), on quit | keys dropped; decrypted views torn down; versions dialog closed | idle (1 min) and `loginctl lock-session`: yes; suspend: not run |
+
+Posture popover (shield, bottom left): memory closed to other programs, core dumps, memory locking, display server, recent files, root/kernel.
+
+Limits:
+
+| Gap | Detail |
+|---|---|
+| Root, kernel, `CAP_SYS_PTRACE` | read any memory. Not defended |
+| `PR_SET_DUMPABLE` | resets on `execve` only; a same-uid process can still use the desktop as the user (open the vault folder, read your exports, keylog on X11) |
+| Portals | xdg-desktop-portal refuses non-dumpable processes. Effects: dark/light read from GSettings instead; "Open Folder" goes through `AppInfo`, not the OpenURI portal; Flatpak would need a different approach |
+| Swap / hibernate | only key material is `mlock`ed (limit 8 MiB by default: `ulimit -l`). Decrypted file contents in previews can reach swap and a hibernation image. Use encrypted swap or none |
+| X11 | any X client can read the window, the clipboard and keystrokes. Wayland isolates clients; the popover shows which one runs |
+| Screenshots | GNOME's screenshot tool and screen casts capture the window (compositor-side, no per-window opt-out on Linux) |
+| Clipboard | a manager that ignores the hint keeps the copy; X11 clients can read it any time |
+| File indexer | GNOME Tracker indexes exported plaintext (seen: `tracker3 search` finds exported `.txt` content). Export only where that's acceptable |
+| GTK / GLib strings | file names and text previews pass through GTK objects that are not zeroed |
+
 ## Transport
 
 | Layer | Protects |
@@ -182,9 +211,9 @@ Not covered on iOS: a jailbroken device or a malicious build while a vault is un
 | Action | Result |
 |---|---|
 | Export / Move out of vault | plaintext file where you put it |
-| Open in external app | temp plaintext copy until lock/quit; the other app can keep its own copies |
+| Open in external app (Mac) | temp plaintext copy until lock/quit; the other app can keep its own copies. Not on Linux |
 | Preview | decrypted into app memory only |
-| Copy recovery key | pasteboard, cleared after 60 s |
+| Copy recovery key / invite | pasteboard / clipboard, cleared after 60 s |
 | CLI `cat`, `get` | stdout / files |
 | Import with move | original deleted after verify — not a secure erase (SSD/APFS snapshots, Time Machine) |
 
@@ -194,7 +223,7 @@ Not covered on iOS: a jailbroken device or a malicious build while a vault is un
 - Certificate pinning is opt-in and pins a CA or a self-signed server certificate you supply (`vaultage trust`, iOS: Certificate Pinning). No trust-on-first-use, no public-key pinning of a public-CA leaf. Unpinned servers are checked against the bundled Mozilla roots.
 - Rotation does not re-encrypt old data; a revoked device keeps what it already downloaded.
 - Any member can purge, rotate, invite or revoke invites. There are no roles.
-- Passphrase typed into the app can be keylogged by root/accessibility malware. Touch ID avoids typing.
+- Passphrase typed into the app can be keylogged by root/accessibility malware (and any X11 client on Linux). Touch ID avoids typing; Linux has no equivalent slot.
 - File names and content pass through Swift/AppKit objects that cannot be reliably zeroed.
 - Preview parsers (images, PDF) run in the same process as the keys.
 - Paths are not Unicode-normalised.
