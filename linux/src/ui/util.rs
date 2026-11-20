@@ -125,6 +125,11 @@ pub fn qr_texture(text: &str, px: i32) -> Option<gdk::Texture> {
     Some(t.upcast())
 }
 
+/// The app icon (256 px PNG embedded at build time).
+pub fn app_icon() -> Option<gdk::Texture> {
+    gdk::Texture::from_bytes(&glib::Bytes::from_static(include_bytes!("../../data/local.vaultage.app.png"))).ok()
+}
+
 /// A label for secondary text.
 pub fn dim(text: &str) -> gtk::Label {
     let l = gtk::Label::builder().label(text).wrap(true).xalign(0.0).build();

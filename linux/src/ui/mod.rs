@@ -562,11 +562,12 @@ impl App {
         col.append(&n);
         col.append(&j);
         let page = adw::StatusPage::builder()
-            .icon_name(crate::APP_ID)
             .title("No Vaults")
             .description("A vault keeps files encrypted on this computer with a key only you hold. Create one, or join one from another device.")
             .child(&col)
             .build();
+        // The icon ships inside the binary, so it shows before install too.
+        page.set_paintable(util::app_icon().as_ref());
         tv.set_content(Some(&page));
         tv
     }

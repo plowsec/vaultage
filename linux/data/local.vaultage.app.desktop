@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Vaultage
+GenericName=Encrypted Vaults
+Comment=Keep files encrypted on this computer and sync them end-to-end encrypted
+Exec=vaultage-gui
+Icon=local.vaultage.app
+Terminal=false
+Categories=Utility;Security;FileTools;GTK;
+Keywords=encryption;vault;sync;files;
+StartupNotify=true
+SingleMainWindow=true
