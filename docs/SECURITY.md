@@ -206,6 +206,30 @@ Notes and dictation (iOS):
 
 Not covered on iOS: a jailbroken device or a malicious build while a vault is unlocked; screenshots you take yourself; iOS keeps the full local replica (no selective sync), so a large vault uses the same space on the phone.
 
+## Android
+
+Client: separate repo `vaultage-android` (Kotlin, this core as a static lib behind a JNI shim). Android 11+ (API 30).
+
+| Measure | Effect | Verified here |
+|---|---|---|
+| App sandbox, state in `noBackupFilesDir` | other apps can't read vault files; no external storage used | data dir pulled (`run-as`) after import, preview, share: no plaintext, no file names |
+| `allowBackup=false`, data-extraction rules exclude everything | no cloud backup, no device-to-device transfer of the key header | manifest checked in the release APK |
+| Biometric slot: random 32-byte secret wrapped by an AES-GCM Keystore key (StrongBox when present), auth per use, invalidated on new enrolment, unlocked-device-required | secret usable only after a strong biometric; re-enrolling invalidates the slot (recovery key or passphrase still work) | add / unlock / adopt with emulator fingerprint |
+| `FLAG_SECURE` on the window, recents screenshot off | no screenshots, recordings, casting or switcher thumbnail | screencap is black; debug builds have a switch to allow screenshots |
+| Lock on leaving the app (at once or 20 s), screen off, idle | keys dropped (same as iOS) | all three on the emulator |
+| Previews from memory: images (`ImageDecoder` on a direct buffer), PDF (sealed `memfd`), audio/video (`MediaDataSource`) | no plaintext cache files | see first row |
+| Share / Open with: `ContentProvider` serving a proxy file descriptor from native memory | no plaintext file; buffer wiped 2 min after the last lock | share sheet shown; receiving app keeps its own copy |
+| Import by file descriptor (`put` from `mmap`/pipe) | no staging copy | SAF import of 4 files |
+| Incognito keyboard (`IME_FLAG_NO_PERSONALIZED_LEARNING`) on every field, no suggestions on secrets, autofill excluded | keyboard doesn't learn names or secrets; no autofill service sees them | Gboard incognito marker seen |
+| `PR_SET_DUMPABLE=0`, `RLIMIT_CORE=0`, `mlock` on keys | no ptrace by same-uid processes, no core files | posture read back in the app |
+| Release: R8, not debuggable, `usesCleartextTraffic=false` | | release APK checked |
+
+Limits:
+- Secrets typed or decoded pass through JVM heap objects (EditText buffer, decoded bitmaps, text) that can't be reliably wiped.
+- Root or a debuggable build (`run-as`, JDWP) can read process memory while a vault is unlocked.
+- TLS is the core's (rustls, bundled Mozilla roots). Android's network security config and user-installed CAs don't apply; use certificate pinning for a private CA.
+- Accessibility services see on-screen text, like any app.
+
 ## Where plaintext leaves the boundary
 
 | Action | Result |
