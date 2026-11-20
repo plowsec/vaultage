@@ -129,6 +129,16 @@ pub fn qr_texture(text: &str, px: i32) -> Option<gdk::Texture> {
     Some(t.upcast())
 }
 
+/// Open a folder in the file manager. Not through gtk::FileLauncher: it goes via the OpenURI
+/// portal, which refuses a non-dumpable process.
+pub fn open_folder(w: &impl IsA<gtk::Widget>, path: &std::path::Path) {
+    let uri = gio::File::for_path(path).uri();
+    let ctx = w.as_ref().display().app_launch_context();
+    if let Err(e) = gio::AppInfo::launch_default_for_uri(&uri, Some(&ctx)) {
+        eprintln!("vaultage: can't open {}: {e}", path.display());
+    }
+}
+
 /// The app icon (256 px PNG embedded at build time).
 pub fn app_icon() -> Option<gdk::Texture> {
     gdk::Texture::from_bytes(&glib::Bytes::from_static(include_bytes!("../../data/local.vaultage.app.png"))).ok()

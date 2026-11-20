@@ -1297,7 +1297,7 @@ impl Browser {
                 let Some(dest) = dir.path() else { return };
                 let Some(app) = me2.app() else { return };
                 app.busy(true);
-                let (b, id, me3, dname) = (app.backend.clone(), me2.id.clone(), me2.clone(), dir.basename().map(|p| p.display().to_string()).unwrap_or_default());
+                let (b, id, me3, dname, dest2) = (app.backend.clone(), me2.id.clone(), me2.clone(), dir.basename().map(|p| p.display().to_string()).unwrap_or_default(), dest.clone());
                 let what = what.clone();
                 bg(move || b.export(&id, &paths, &dest, remove), move |r| {
                     let Some(app) = me3.app() else { return };
@@ -1307,10 +1307,15 @@ impl Browser {
                         me3.reload();
                     }
                     match r {
-                        Ok(_) => {
+                        Ok(out) => {
                             let w = app.window.clone();
+                            // Name what landed on disk ("note (2).txt" when the name was taken).
+                            let what = match out.as_slice() {
+                                [one] => format!("“{}”", one.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
+                                _ => what,
+                            };
                             toast_action(&app.toasts, &format!("{} {what} to “{dname}”", if remove { "Moved" } else { "Exported" }), "Open Folder", move || {
-                                gtk::FileLauncher::new(Some(&dir)).launch(Some(&w), None::<&gio::Cancellable>, |_| {});
+                                super::util::open_folder(&w, &dest2);
                             });
                         }
                         Err(e) => me3.report("Couldn’t export", &e),

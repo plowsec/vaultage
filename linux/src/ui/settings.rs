@@ -132,7 +132,7 @@ fn build(app: &Rc<App>, d: &adw::PreferencesDialog, data: Data) {
     open.set_tooltip_text(Some("Show the encrypted folder"));
     let (p, w) = (v.path.clone(), app.window.clone());
     open.connect_clicked(move |_| {
-        gtk::FileLauncher::new(Some(&gio::File::for_path(&p))).launch(Some(&w), None::<&gio::Cancellable>, |_| {});
+        super::util::open_folder(&w, std::path::Path::new(&p));
     });
     r.add_suffix(&open);
     g.add(&r);
@@ -433,7 +433,7 @@ pub fn forget(app: &Rc<App>, id: &str) {
                     let w = a2.window.clone();
                     d.connect_response(None, move |_, r| {
                         if r == "show" {
-                            gtk::FileLauncher::new(Some(&gio::File::for_path(&p))).open_containing_folder(Some(&w), None::<&gio::Cancellable>, |_| {});
+                            super::util::open_folder(&w, p.parent().unwrap_or(&p));
                         }
                     });
                     d.present(Some(&a2.window));
