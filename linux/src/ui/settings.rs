@@ -290,20 +290,16 @@ fn build(app: &Rc<App>, d: &adw::PreferencesDialog, data: Data) {
         let p1 = adw::PasswordEntryRow::builder().title("New passphrase").build();
         let p2 = adw::PasswordEntryRow::builder().title("Confirm").build();
         let hint = super::util::strength_label();
-        let hr = adw::ActionRow::new();
-        hr.set_child(Some(&hint));
-        hint.set_margin_start(12);
-        hint.set_margin_top(6);
-        hint.set_margin_bottom(6);
         let add = gtk::Button::with_label("Add Passphrase");
         add.add_css_class("suggested-action");
         add.set_sensitive(false);
-        let addr = adw::ActionRow::new();
+        // Strength hint and button share one row; the row itself takes no focus.
+        let addr = adw::ActionRow::builder().activatable(false).focusable(false).build();
         add.set_valign(gtk::Align::Center);
+        addr.add_prefix(&hint);
         addr.add_suffix(&add);
         exp.add_row(&p1);
         exp.add_row(&p2);
-        exp.add_row(&hr);
         exp.add_row(&addr);
         for e in [&p1, &p2] {
             let (p1c, p2c, h, ad) = (p1.clone(), p2.clone(), hint.clone(), add.clone());
