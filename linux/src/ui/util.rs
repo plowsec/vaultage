@@ -203,6 +203,10 @@ impl Sheet {
         self.toolbar.set_content(Some(&sc));
         // Enter in any field triggers the action button, when it's enabled.
         enter_activates(body.as_ref(), &self.action);
+        // Start in the first field, so typing goes there.
+        if let Some(e) = first_entry(body.as_ref()) {
+            self.dialog.set_focus(Some(&e));
+        }
         self.fit();
     }
     /// An open dialog keeps its size: grow it to its content (up to the window).
@@ -252,6 +256,20 @@ fn enter_activates(w: &gtk::Widget, action: &gtk::Button) {
         enter_activates(&x, action);
         c = x.next_sibling();
     }
+}
+
+fn first_entry(w: &gtk::Widget) -> Option<gtk::Widget> {
+    if w.is::<adw::EntryRow>() {
+        return Some(w.clone());
+    }
+    let mut c = w.first_child();
+    while let Some(x) = c {
+        if let Some(e) = first_entry(&x) {
+            return Some(e);
+        }
+        c = x.next_sibling();
+    }
+    None
 }
 
 /// Take a secret out of a password row and clear the row.
