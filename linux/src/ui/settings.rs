@@ -50,7 +50,20 @@ pub fn vault_settings(app: &Rc<App>, id: &str) {
 fn reopen(app: &Rc<App>, id: &str) {
     let d = OPEN_SETTINGS.with(|o| o.borrow().as_ref().filter(|(i, _)| i == id).and_then(|(_, w)| w.upgrade()));
     if let Some(d) = d {
-        refresh_settings(app, &d, id);
+        // Another dialog on top (invite, rotation…): rebuild when it closes, or closing it would
+        // hand focus back to a row that no longer exists and scroll this page to the top.
+        match app.window.visible_dialog() {
+            Some(top) if top != *d.upcast_ref::<adw::Dialog>() => {
+                let (a, id2) = (app.clone(), id.to_string());
+                let once = std::cell::Cell::new(true);
+                top.connect_closed(move |_| {
+                    if once.replace(false) {
+                        refresh_settings(&a, &d, &id2);
+                    }
+                });
+            }
+            _ => refresh_settings(app, &d, id),
+        }
     }
     app.refresh_vaults();
 }
@@ -389,21 +402,34 @@ fn build(app: &Rc<App>, d: &adw::PreferencesDialog, data: Data) {
         }
     });
     if let (Some(y), Some(sw)) = (keep_scroll, scroller(&page)) {
-        // The new page has no height yet; set the value once its content is measured.
-        let adj = sw.vadjustment();
-        let done = Rc::new(std::cell::Cell::new(false));
-        let restore = {
-            let done = done.clone();
-            move |a: &gtk::Adjustment| {
-                if !done.get() && a.upper() - a.page_size() >= y {
-                    a.set_value(y);
-                    done.set(true);
+        // The new page has no height yet (and none at all while another dialog covers this one):
+        // set the value once it is shown and its content measured.
+        let start = move || {
+            let adj = sw.vadjustment();
+            let done = Rc::new(std::cell::Cell::new(false));
+            let restore = {
+                let done = done.clone();
+                move |a: &gtk::Adjustment| {
+                    if !done.get() && a.upper() - a.page_size() >= y {
+                        a.set_value(y);
+                        done.set(true);
+                    }
                 }
-            }
+            };
+            restore(&adj);
+            adj.connect_changed(move |a| restore(a));
+            glib::timeout_add_local_once(std::time::Duration::from_millis(800), move || done.set(true));
         };
-        restore(&adj);
-        adj.connect_changed(move |a| restore(a));
-        glib::timeout_add_local_once(std::time::Duration::from_millis(600), move || done.set(true));
+        if page.is_mapped() {
+            start();
+        } else {
+            let once = std::cell::Cell::new(Some(start));
+            page.connect_map(move |_| {
+                if let Some(f) = once.take() {
+                    f();
+                }
+            });
+        }
     }
 }
 

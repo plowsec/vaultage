@@ -87,17 +87,13 @@ pub fn toast_action(overlay: &adw::ToastOverlay, text: &str, button: &str, f: im
     overlay.add_toast(t);
 }
 
-/// Put a secret (recovery key, invite) on the clipboard, marked for clipboard managers not to keep
-/// (`x-kde-passwordManagerHint: secret`), and clear it after 60 s if it is still ours.
+/// Put a secret (recovery key, invite) on the clipboard and clear it after 60 s if it is still ours.
+/// No `x-kde-passwordManagerHint`: GDK only serves MIME types with a `/`, so the hint would be
+/// offered with empty content (checked with `wl-paste`), which managers don't honour.
 pub fn copy_secret(w: &impl IsA<gtk::Widget>, text: &str) {
     let clip = w.as_ref().clipboard();
     let bytes = glib::Bytes::from_owned(zeroize::Zeroizing::new(text.as_bytes().to_vec()));
-    let providers = [
-        gdk::ContentProvider::for_bytes("text/plain;charset=utf-8", &bytes),
-        gdk::ContentProvider::for_bytes("text/plain", &bytes),
-        gdk::ContentProvider::for_bytes("UTF8_STRING", &bytes),
-        gdk::ContentProvider::for_bytes("x-kde-passwordManagerHint", &glib::Bytes::from_static(b"secret")),
-    ];
+    let providers = [gdk::ContentProvider::for_bytes("text/plain;charset=utf-8", &bytes), gdk::ContentProvider::for_bytes("text/plain", &bytes)];
     let p = gdk::ContentProvider::new_union(&providers);
     clip.set_content(Some(&p)).ok();
     glib::timeout_add_seconds_local_once(60, move || {
@@ -205,6 +201,8 @@ impl Sheet {
         let clamp = adw::Clamp::builder().maximum_size(560).child(&col).build();
         let sc = gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).propagate_natural_height(true).child(&clamp).build();
         self.toolbar.set_content(Some(&sc));
+        // Enter in any field triggers the action button, when it's enabled.
+        enter_activates(body.as_ref(), &self.action);
         self.fit();
     }
     /// An open dialog keeps its size: grow it to its content (up to the window).
@@ -236,6 +234,23 @@ impl Sheet {
         self.cancel.set_sensitive(true);
         self.action.set_sensitive(true);
         self.action.set_label(label);
+    }
+}
+
+fn enter_activates(w: &gtk::Widget, action: &gtk::Button) {
+    if let Some(e) = w.downcast_ref::<adw::EntryRow>() {
+        let a = action.clone();
+        e.connect_entry_activated(move |_| {
+            if a.is_sensitive() && a.is_visible() {
+                a.emit_clicked();
+            }
+        });
+        return;
+    }
+    let mut c = w.first_child();
+    while let Some(x) = c {
+        enter_activates(&x, action);
+        c = x.next_sibling();
     }
 }
 
