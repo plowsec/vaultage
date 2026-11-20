@@ -36,6 +36,9 @@ pub struct Browser {
     sort: Cell<(SortKey, bool)>,
     thumbs: RefCell<HashMap<String, gdk::Texture>>,
     thumbs_pending: RefCell<HashSet<String>>,
+    /// Grid cells waiting for a thumbnail: (key, cell). GTK doesn't rebind a cell whose item object
+    /// is unchanged, so the cell is updated directly when its texture arrives.
+    thumb_wait: RefCell<Vec<(String, glib::WeakRef<gtk::Box>)>>,
     /// (entry, rev) in the preview pane.
     previewing: RefCell<Option<(String, u64)>>,
     preview_seq: Cell<u64>,
@@ -201,6 +204,7 @@ impl Browser {
             sort: Cell::new((SortKey::Name, true)),
             thumbs: RefCell::new(HashMap::new()),
             thumbs_pending: RefCell::new(HashSet::new()),
+            thumb_wait: RefCell::new(Vec::new()),
             previewing: RefCell::new(None),
             preview_seq: Cell::new(0),
             search_seq: Cell::new(0),
@@ -304,7 +308,8 @@ impl Browser {
             icon.set_icon_name(Some(preview::icon_name(&it.name, it.is_dir)));
             let label = icon.next_sibling().and_downcast::<gtk::Label>().unwrap();
             label.set_label(&it.name);
-            label.set_tooltip_text(Some(&it.path));
+            // Full path only where it adds something (search results from other folders).
+            label.set_tooltip_text((it.path != it.name).then_some(it.path.as_str()));
             label.next_sibling().unwrap().set_visible(it.pending);
         });
         let col = gtk::ColumnViewColumn::new(Some("Name"), Some(name));
@@ -369,12 +374,22 @@ impl Browser {
             let icon = pic.next_sibling().and_downcast::<gtk::Image>().unwrap();
             let l = icon.next_sibling().and_downcast::<gtk::Label>().unwrap();
             l.set_label(&it.name);
-            b.set_tooltip_text(Some(&it.path));
-            let tex = me.upgrade().and_then(|me| me.thumbnail(&it));
-            pic.set_visible(tex.is_some());
-            pic.set_paintable(tex.as_ref());
-            icon.set_visible(tex.is_none());
+            b.set_tooltip_text((it.path != it.name || it.name.chars().count() > 28).then_some(it.path.as_str()));
             icon.set_icon_name(Some(preview::icon_name(&it.name, it.is_dir)));
+            let tex = match me.upgrade() {
+                Some(me) => {
+                    let (key, tex) = me.thumbnail(&it);
+                    b.set_widget_name(&key);
+                    if tex.is_none() && !key.is_empty() {
+                        let mut w = me.thumb_wait.borrow_mut();
+                        w.retain(|(_, c)| c.upgrade().is_some_and(|c| c != b));
+                        w.push((key, b.downgrade()));
+                    }
+                    tex
+                }
+                None => None,
+            };
+            show_thumb(&b, tex.as_ref());
         });
         grid.set_factory(Some(&fac));
     }
@@ -1040,21 +1055,21 @@ impl Browser {
     }
 
     /// Cached thumbnail, or None while it loads (the cell is rebound when it's ready).
-    fn thumbnail(self: &Rc<Self>, it: &Item) -> Option<gdk::Texture> {
+    /// (cache key, texture if ready). An empty key: no thumbnail for this item.
+    fn thumbnail(self: &Rc<Self>, it: &Item) -> (String, Option<gdk::Texture>) {
         let show = self.app().map(|a| a.prefs.borrow().show_thumbnails).unwrap_or(false);
+        let (Some(entry), Some(app)) = (it.id.clone(), self.app()) else { return (String::new(), None) };
         if it.is_dir || !show || !preview::can_thumbnail(&it.name, it.size) {
-            return None;
+            return (String::new(), None);
         }
-        let entry = it.id.clone()?;
         let key = format!("{entry}:{}", it.rev);
         if let Some(t) = self.thumbs.borrow().get(&key) {
-            return Some(t.clone());
+            return (key, Some(t.clone()));
         }
         if !self.thumbs_pending.borrow_mut().insert(key.clone()) {
-            return None;
+            return (key, None);
         }
-        let app = self.app()?;
-        let (b, id, me, path) = (app.backend.clone(), self.id.clone(), self.clone(), it.path.clone());
+        let (b, id, me, k2) = (app.backend.clone(), self.id.clone(), self.clone(), key.clone());
         bg(move || b.read(&id, &entry, None, preview::MAX_THUMB), move |r| {
             if me.closed.get() {
                 return;
@@ -1071,15 +1086,20 @@ impl Browser {
                 let Ok(pb) = pb else { return };
                 #[allow(deprecated)]
                 let tex = gdk::Texture::for_pixbuf(&pb);
+                me.thumb_wait.borrow_mut().retain(|(k, c)| {
+                    let Some(c) = c.upgrade() else { return false };
+                    if *k != key {
+                        return true;
+                    }
+                    if c.widget_name() == key {
+                        show_thumb(&c, Some(&tex));
+                    }
+                    false
+                });
                 me.thumbs.borrow_mut().insert(key, tex);
-                let pos = me.items.borrow().iter().position(|i| i.path == path);
-                if let Some(p) = pos {
-                    me.store.items_changed(p as u32, 1, 1);
-                    // items_changed drops the selection of that row; put it back.
-                }
             });
         });
-        None
+        (k2, None)
     }
 
     // ---- operations ----
@@ -1388,4 +1408,13 @@ impl StatusBar {
         rekey.set_visible(false);
         StatusBar { root, icon, spinner, label, retry, rekey, activity, activity_label, progress, summary }
     }
+}
+
+/// A grid cell: picture (thumbnail) or icon.
+fn show_thumb(cell: &gtk::Box, tex: Option<&gdk::Texture>) {
+    let pic = cell.first_child().and_downcast::<gtk::Picture>().unwrap();
+    let icon = pic.next_sibling().and_downcast::<gtk::Image>().unwrap();
+    pic.set_visible(tex.is_some());
+    pic.set_paintable(tex);
+    icon.set_visible(tex.is_none());
 }

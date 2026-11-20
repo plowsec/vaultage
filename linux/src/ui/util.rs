@@ -65,8 +65,12 @@ pub fn ask_text(parent: &impl IsA<gtk::Widget>, title: &str, body: &str, initial
         Some(i) if i > 0 => i as i32,
         _ => -1,
     };
-    entry.grab_focus();
-    entry.select_region(0, stem);
+    // After the dialog maps: focusing an entry selects all of it.
+    let e3 = entry.clone();
+    glib::idle_add_local_once(move || {
+        e3.grab_focus();
+        e3.select_region(0, stem);
+    });
 }
 
 pub fn toast(overlay: &adw::ToastOverlay, text: &str) {
@@ -185,8 +189,9 @@ impl Sheet {
         col.set_margin_bottom(24);
         col.set_margin_start(12);
         col.set_margin_end(12);
-        col.append(body);
+        // Error first: a dialog doesn't grow after it is shown, so text at the bottom would hide.
         col.append(&self.error);
+        col.append(body);
         let clamp = adw::Clamp::builder().maximum_size(560).child(&col).build();
         let sc = gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).propagate_natural_height(true).child(&clamp).build();
         self.toolbar.set_content(Some(&sc));
@@ -223,7 +228,8 @@ pub fn take_secret(row: &adw::PasswordEntryRow, trim: bool) -> crate::logic::Sec
 
 /// Strength hint under a new passphrase.
 pub fn strength_label() -> gtk::Label {
-    let l = gtk::Label::builder().xalign(0.0).visible(false).build();
+    // Always visible (blank when there's nothing to say): the dialog keeps the height it opened with.
+    let l = gtk::Label::builder().xalign(0.0).label("\u{a0}").build();
     l.add_css_class("caption");
     l
 }
@@ -237,13 +243,11 @@ pub fn update_strength(label: &gtk::Label, pass: &str, confirm: &str) {
     if mismatch {
         label.set_label("Passphrases don’t match");
         label.add_css_class("error");
-        label.set_visible(true);
     } else if !pass.is_empty() {
         label.set_label(s.label());
         label.add_css_class(s.css());
-        label.set_visible(true);
     } else {
-        label.set_visible(false);
+        label.set_label("\u{a0}");
     }
 }
 

@@ -340,6 +340,8 @@ pub fn join_vault(app: &Rc<App>) {
 
 pub fn move_to(app: &Rc<App>, id: &str, paths: Vec<String>, done: impl Fn(Vec<String>, Option<UiError>) + 'static) {
     let s = sheet("Move To", "Move", 420);
+    // The folder list fills in after the dialog opens; a dialog keeps its first size.
+    s.dialog.set_content_height(440);
     let list = gtk::ListBox::new();
     list.add_css_class("boxed-list");
     list.set_selection_mode(gtk::SelectionMode::Single);
