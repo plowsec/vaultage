@@ -100,7 +100,7 @@ fn apply() -> Posture {
     unsafe {
         let lim = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
         p.core_dumps_off = libc::setrlimit(libc::RLIMIT_CORE, &lim) == 0;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             // Also blocks ptrace and /proc/<pid>/mem from same-uid processes.
             p.attach_denied = libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) == 0;
