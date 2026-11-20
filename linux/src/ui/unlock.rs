@@ -86,6 +86,10 @@ impl UnlockPage {
         p
     }
 
+    pub fn clear_error(&self) {
+        self.error.set_visible(false);
+    }
+
     pub fn focus(&self) {
         let (p, r, h) = (self.pass.clone(), self.recovery.clone(), self.has_pass);
         glib::idle_add_local_once(move || {

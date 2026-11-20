@@ -59,6 +59,7 @@ pub struct App {
     pub browsers: RefCell<HashMap<String, Rc<browser::Browser>>>,
     /// Imports/exports running: idle lock waits.
     pub busy: Cell<u32>,
+    sidebar_sig: RefCell<String>,
     tick: Cell<u64>,
     refreshing: Cell<bool>,
     unlock_page: RefCell<Option<(String, Rc<unlock::UnlockPage>)>>,
@@ -136,6 +137,7 @@ fn start(gtk_app: &adw::Application, posture: Posture) {
         content: content.clone(),
         browsers: RefCell::new(HashMap::new()),
         busy: Cell::new(0),
+        sidebar_sig: RefCell::new(String::new()),
         tick: Cell::new(0),
         refreshing: Cell::new(false),
         unlock_page: RefCell::new(None),
@@ -326,7 +328,15 @@ fn track_activity(app: &Rc<App>) {
     let m = gtk::EventControllerMotion::new();
     m.set_propagation_phase(gtk::PropagationPhase::Capture);
     let n = note.clone();
-    m.connect_motion(move |_, _, _| n());
+    // GTK repeats a motion event at the same spot when widgets change under a still pointer
+    // (a list reloads); only a real move counts.
+    let last = std::cell::Cell::new((f64::NAN, f64::NAN));
+    m.connect_motion(move |_, x, y| {
+        let (lx, ly) = last.replace((x, y));
+        if (x - lx).abs() >= 1.0 || (y - ly).abs() >= 1.0 || lx.is_nan() {
+            n();
+        }
+    });
     app.window.add_controller(m);
     let s = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
     s.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -427,6 +437,20 @@ impl App {
     }
 
     fn rebuild_sidebar(&self) {
+        // Rebuild only on a visible change: rebuilding drops keyboard focus and hover state.
+        let sig: String = self
+            .vaults
+            .borrow()
+            .iter()
+            .map(|v| {
+                let n = self.browsers.borrow().get(&v.id).map(|b| b.trash_count.get()).unwrap_or(0);
+                format!("{}\u{1}{}\u{1}{}{}{}\u{1}{n}\u{2}", v.id, v.name, v.unlocked as u8, v.missing as u8, v.remote.is_some() as u8)
+            })
+            .chain(std::iter::once(format!("{:?}", self.selection.borrow())))
+            .collect();
+        if self.sidebar_sig.replace(sig.clone()) == sig {
+            return;
+        }
         self.rebuilding.set(true);
         while let Some(c) = self.sidebar.first_child() {
             self.sidebar.remove(&c);
@@ -598,6 +622,9 @@ impl App {
         }
         let had = !self.browsers.borrow().is_empty();
         self.tear_down_all();
+        if let Some((_, p)) = self.unlock_page.borrow().as_ref() {
+            p.clear_error();
+        }
         // Close dialogs that show decrypted data (versions). Not a recovery key still to be saved.
         for _ in 0..8 {
             match self.window.visible_dialog() {
