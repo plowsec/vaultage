@@ -155,7 +155,7 @@ Limits:
 | Swap / hibernate | only key material is `mlock`ed (limit 8 MiB by default: `ulimit -l`). Decrypted file contents in previews can reach swap and a hibernation image. Use encrypted swap or none |
 | X11 | any X client can read the window, the clipboard and keystrokes. Wayland isolates clients; the popover shows which one runs |
 | Screenshots | GNOME's screenshot tool and screen casts capture the window (compositor-side, no per-window opt-out on Linux) |
-| Clipboard | no password-manager hint: GDK serves only `type/subtype` MIME types, so `x-kde-passwordManagerHint` was offered but empty, and was dropped. Clipboard managers keep the copy; X11 clients can read it any time |
+| Clipboard | no password-manager hint: GTK4 offered `x-kde-passwordManagerHint` but served it empty (`wl-paste`; likely GDK wants `type/subtype` names), so it was dropped. Clipboard managers keep the copy; X11 clients can read it any time |
 | File indexer | GNOME Tracker indexes exported plaintext (seen: `tracker3 search` finds exported `.txt` content). Export only where that's acceptable |
 | GTK / GLib strings | file names and text previews pass through GTK objects that are not zeroed |
 

@@ -88,8 +88,8 @@ pub fn toast_action(overlay: &adw::ToastOverlay, text: &str, button: &str, f: im
 }
 
 /// Put a secret (recovery key, invite) on the clipboard and clear it after 60 s if it is still ours.
-/// No `x-kde-passwordManagerHint`: GDK only serves MIME types with a `/`, so the hint would be
-/// offered with empty content (checked with `wl-paste`), which managers don't honour.
+/// No `x-kde-passwordManagerHint`: GTK4 offered it but served it empty (seen with `wl-paste`;
+/// likely GDK wants `type/subtype` names), which managers don't honour.
 pub fn copy_secret(w: &impl IsA<gtk::Widget>, text: &str) {
     let clip = w.as_ref().clipboard();
     let bytes = glib::Bytes::from_owned(zeroize::Zeroizing::new(text.as_bytes().to_vec()));
