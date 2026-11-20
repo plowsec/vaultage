@@ -140,8 +140,8 @@ Ad-hoc signing gives the runtime protections but not identity: anyone can re-sig
 | Previews and thumbnails decoded from memory (`gdk::Texture`, `Pixbuf` from a memory stream); buffers zeroed on drop | no plaintext cache, no GNOME thumbnail | marker string imported, previewed, thumbnailed; then grep of `~/.local/share/vaultage`, `~/.cache`, `/tmp`, `/var/tmp`, `/dev/shm`, `/run/user/1000`: only the explicit exports matched |
 | GTK recent files off (`gtk-recent-files-enabled=false`, max age 0) | file choosers don't write `recently-used.xbel` | file empty after import and export |
 | Secrets typed into password rows: read once, row cleared, Rust copy zeroed | short life of passphrase copies | code review; GTK's own entry buffer is not ours to zero |
-| Recovery key / invite → clipboard as a union with `x-kde-passwordManagerHint: secret`; cleared after 60 s if still ours | clipboard managers that honour the hint don't keep it | set; contents not inspected |
-| Lock all on idle (setting, default 10 min), on screen lock and suspend (logind `Lock`, `PrepareForSleep`; `org.gnome.ScreenSaver` / `org.freedesktop.ScreenSaver` `ActiveChanged`), on quit | keys dropped; decrypted views torn down; versions dialog closed | idle (1 min) and `loginctl lock-session`: yes; suspend: not run |
+| Recovery key / invite → clipboard as `text/plain` only; cleared after 60 s if still ours | short life on the clipboard | `wl-paste` (GNOME 46, Wayland): text matched at 20 s, nothing at 68 s |
+| Lock all on idle (setting, default 10 min), on screen lock and suspend (logind `Lock`, `PrepareForSleep`; `org.gnome.ScreenSaver` / `org.freedesktop.ScreenSaver` `ActiveChanged`), on quit | keys dropped; decrypted views torn down; versions dialog closed | idle (1 min) and `loginctl lock-session`: yes. Suspend: `systemctl suspend` with `systemd-suspend.service` replaced by `/bin/true` (runtime drop-in): `PrepareForSleep` locked both vaults before GNOME's screen lock. A real sleep/resume: not run |
 
 Posture popover (shield, bottom left): memory closed to other programs, core dumps, memory locking, display server, recent files, root/kernel.
 
@@ -155,7 +155,7 @@ Limits:
 | Swap / hibernate | only key material is `mlock`ed (limit 8 MiB by default: `ulimit -l`). Decrypted file contents in previews can reach swap and a hibernation image. Use encrypted swap or none |
 | X11 | any X client can read the window, the clipboard and keystrokes. Wayland isolates clients; the popover shows which one runs |
 | Screenshots | GNOME's screenshot tool and screen casts capture the window (compositor-side, no per-window opt-out on Linux) |
-| Clipboard | a manager that ignores the hint keeps the copy; X11 clients can read it any time |
+| Clipboard | no password-manager hint: GDK serves only `type/subtype` MIME types, so `x-kde-passwordManagerHint` was offered but empty, and was dropped. Clipboard managers keep the copy; X11 clients can read it any time |
 | File indexer | GNOME Tracker indexes exported plaintext (seen: `tracker3 search` finds exported `.txt` content). Export only where that's acceptable |
 | GTK / GLib strings | file names and text previews pass through GTK objects that are not zeroed |
 
