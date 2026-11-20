@@ -152,8 +152,11 @@ impl Browser {
         st.bind_property("active", &search_bar, "search-mode-enabled").bidirectional().build();
         root.add_top_bar(&search_bar);
         let banner = adw::Banner::new("");
+        // Titles carry file names: plain text, not markup.
+        banner.set_use_markup(false);
         root.add_top_bar(&banner);
         let integrity = adw::Banner::new("");
+        integrity.set_use_markup(false);
         integrity.set_button_label(Some("Dismiss"));
         integrity.connect_button_clicked(|b| b.set_revealed(false));
         root.add_top_bar(&integrity);
@@ -895,7 +898,10 @@ impl Browser {
             ("A key rotation was started on this computer and not finished.".to_string(), "Finish…")
         } else if !st.conflicts.is_empty() {
             let n = st.conflicts.len() as u64;
-            (format!("{} edited on two devices at once. Both versions were kept: “{}”.", text::count2(n, "file was", "files were"), st.conflicts[0]), "Dismiss")
+            // The core's line already says what happened and where each version is.
+            let first = &st.conflicts[0];
+            let t = if n == 1 { format!("Edited on two devices at once. {first}") } else { format!("{n} files were edited on two devices at once. {first} (and {} more)", n - 1) };
+            (t, "Dismiss")
         } else {
             (String::new(), "")
         };
@@ -1251,7 +1257,8 @@ impl Browser {
         if paths.is_empty() {
             return;
         }
-        let what = if paths.len() == 1 { format!("“{}”", vaultage_core::model::basename(&paths[0])) } else { format!("{} items", paths.len()) };
+        let one = paths.len() == 1;
+        let what = if one { format!("“{}”", vaultage_core::model::basename(&paths[0])) } else { format!("{} items", paths.len()) };
         let synced = app.vault(&self.id).map(|v| v.remote.is_some()).unwrap_or(false);
         let me = self.clone();
         confirm(
@@ -1284,7 +1291,8 @@ impl Browser {
         if paths.is_empty() {
             return;
         }
-        let what = if paths.len() == 1 { format!("“{}”", vaultage_core::model::basename(&paths[0])) } else { format!("{} items", paths.len()) };
+        let one = paths.len() == 1;
+        let what = if one { format!("“{}”", vaultage_core::model::basename(&paths[0])) } else { format!("{} items", paths.len()) };
         let me = self.clone();
         let what2 = what.clone();
         let choose = move || {
@@ -1318,7 +1326,7 @@ impl Browser {
                                 super::util::open_folder(&w, &dest2);
                             });
                         }
-                        Err(e) => me3.report("Couldn’t export", &e),
+                        Err(e) => me3.report(if remove { "Couldn’t move out" } else { "Couldn’t export" }, &e),
                     }
                 });
             });
@@ -1327,7 +1335,11 @@ impl Browser {
             confirm(
                 &app.window,
                 &format!("Move {what} out of “{}”?", app.vault_name(&self.id)),
-                "They will be decrypted into the folder you choose and removed from the vault. The copies on disk are NOT encrypted. Until the vault’s Trash history is gone, they can still be restored here.",
+                if one {
+                    "It will be decrypted into the folder you choose and removed from the vault. The copy on disk is NOT encrypted. Until the vault’s Trash history is gone, it can still be restored here."
+                } else {
+                    "They will be decrypted into the folder you choose and removed from the vault. The copies on disk are NOT encrypted. Until the vault’s Trash history is gone, they can still be restored here."
+                },
                 "Choose Destination…",
                 false,
                 choose,
