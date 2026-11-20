@@ -46,6 +46,13 @@ pub fn vault_settings(app: &Rc<App>, id: &str) {
     d.present(Some(&app.window));
 }
 
+/// Vaults were locked: rebuild the open settings dialog so it stops offering unlocked-only actions.
+pub fn refresh_open(app: &Rc<App>) {
+    if let Some(id) = OPEN_SETTINGS.with(|o| o.borrow().as_ref().filter(|(_, w)| w.upgrade().is_some()).map(|(i, _)| i.clone())) {
+        reopen(app, &id);
+    }
+}
+
 /// Re-read and rebuild the open settings dialog (after a change).
 fn reopen(app: &Rc<App>, id: &str) {
     let d = OPEN_SETTINGS.with(|o| o.borrow().as_ref().filter(|(i, _)| i == id).and_then(|(_, w)| w.upgrade()));
@@ -411,8 +418,14 @@ fn build(app: &Rc<App>, d: &adw::PreferencesDialog, data: Data) {
                 let done = done.clone();
                 move |a: &gtk::Adjustment| {
                     if !done.get() && a.upper() - a.page_size() >= y {
-                        a.set_value(y);
+                        // Not from inside "changed": that fires during the viewport's allocation,
+                        // and a value set there doesn't move the content until something else
+                        // re-lays it out.
                         done.set(true);
+                        let a = a.clone();
+                        glib::idle_add_local_once(move || {
+                            a.set_value(y);
+                        });
                     }
                 }
             };

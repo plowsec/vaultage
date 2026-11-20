@@ -631,7 +631,7 @@ impl App {
         let a = self.clone();
         let id = id.to_string();
         bg(move || b.lock(&id), move |_| {
-            a.refresh_vaults();
+            settings::refresh_open(&a);
         });
     }
 
@@ -664,7 +664,7 @@ impl App {
         let b = self.backend.clone();
         let a = self.clone();
         bg(move || b.lock_all(), move |_| {
-            a.refresh_vaults();
+            settings::refresh_open(&a);
             if had && reason == LockReason::Idle {
                 a.toast("Vaults locked after inactivity");
             }
