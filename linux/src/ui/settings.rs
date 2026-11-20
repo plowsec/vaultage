@@ -257,7 +257,7 @@ fn build(app: &Rc<App>, d: &adw::PreferencesDialog, data: Data) {
         let r = row(&title, &sub);
         r.add_prefix(&gtk::Image::from_icon_name(match s.kind {
             SlotKind::Passphrase => "dialog-password-symbolic",
-            SlotKind::Recovery => "key-symbolic",
+            SlotKind::Recovery => "channel-secure-symbolic",
             SlotKind::SecureEnclave => "computer-symbolic",
         }));
         let rm = gtk::Button::from_icon_name("user-trash-symbolic");
@@ -370,7 +370,8 @@ fn build(app: &Rc<App>, d: &adw::PreferencesDialog, data: Data) {
     page.add(&g);
     d.add(&page);
     // Don't land in the name field (typing would rename the vault).
-    d.set_focus(None::<&gtk::Widget>);
+    let d2 = d.clone();
+    glib::idle_add_local_once(move || d2.set_focus(None::<&gtk::Widget>));
 }
 
 fn pin_from_file(app: &Rc<App>, url: &str, id: &str) {
@@ -541,6 +542,10 @@ pub fn invite(app: &Rc<App>, id: &str) {
                     col.append(&pic);
                 }
                 let code_l = gtk::Label::builder().label(code.as_str()).selectable(true).wrap(true).wrap_mode(gtk::pango::WrapMode::Char).build();
+                // Pango would add a hyphen where it breaks a line; in a code that reads as part of it.
+                let attrs = gtk::pango::AttrList::new();
+                attrs.insert(gtk::pango::AttrInt::new_insert_hyphens(false));
+                code_l.set_attributes(Some(&attrs));
                 code_l.add_css_class("monospace");
                 code_l.add_css_class("caption");
                 col.append(&code_l);

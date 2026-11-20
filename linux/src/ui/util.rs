@@ -195,6 +195,14 @@ impl Sheet {
         let clamp = adw::Clamp::builder().maximum_size(560).child(&col).build();
         let sc = gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).propagate_natural_height(true).child(&clamp).build();
         self.toolbar.set_content(Some(&sc));
+        // An open dialog keeps its size: grow it to the new content (up to the window).
+        if self.dialog.is_mapped() {
+            let w = self.dialog.width().max(320);
+            let (_, nat, _, _) = clamp.measure(gtk::Orientation::Vertical, w);
+            let (_, head, _, _) = self.header.measure(gtk::Orientation::Vertical, w);
+            let max = self.dialog.root().map(|r| r.height() - 48).unwrap_or(nat + head);
+            self.dialog.set_content_height((nat + head).min(max).max(self.dialog.height()));
+        }
     }
     pub fn show_error(&self, text: &str) {
         self.error.set_label(text);
