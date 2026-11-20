@@ -86,6 +86,7 @@ fn start(gtk_app: &adw::Application, posture: Posture) {
         s.set_gtk_recent_files_max_age(0);
     }
     gtk::Window::set_default_icon_name(crate::APP_ID);
+    follow_desktop_style();
     let backend = match Backend::open(None) {
         Ok(b) => Arc::new(b),
         Err(e) => {
@@ -303,6 +304,32 @@ fn setup_actions(app: &Rc<App>) {
     with_id("vault-settings", Box::new(move |id| settings::vault_settings(&a, &id)));
     let a = app.clone();
     with_id("forget-vault", Box::new(move |id| settings::forget(&a, &id)));
+}
+
+/// Dark/light from GSettings when the settings portal can't be used. xdg-desktop-portal refuses
+/// a non-dumpable process ("Unable to open /proc/PID/root"), so libadwaita gets no color scheme.
+fn follow_desktop_style() {
+    let sm = adw::StyleManager::default();
+    if sm.system_supports_color_schemes() {
+        return;
+    }
+    const SCHEMA: &str = "org.gnome.desktop.interface";
+    let ok = gio::SettingsSchemaSource::default().and_then(|src| src.lookup(SCHEMA, true)).is_some_and(|s| s.has_key("color-scheme"));
+    if !ok {
+        return;
+    }
+    let settings = gio::Settings::new(SCHEMA);
+    let apply = move |s: &gio::Settings| {
+        sm.set_color_scheme(match s.string("color-scheme").as_str() {
+            "prefer-dark" => adw::ColorScheme::PreferDark,
+            "prefer-light" => adw::ColorScheme::PreferLight,
+            _ => adw::ColorScheme::Default,
+        });
+    };
+    apply(&settings);
+    settings.connect_changed(Some("color-scheme"), move |s, _| apply(s));
+    // Lives as long as the app.
+    std::mem::forget(settings);
 }
 
 /// Input in our window counts as activity for the idle lock.
