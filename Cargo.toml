@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["crates/core", "crates/server", "crates/cli", "crates/ffi"]
+# Linux GUI: own workspace and lockfile (needs GTK to build).
+exclude = ["linux"]
 
 [workspace.package]
 version = "0.1.0"

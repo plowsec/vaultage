@@ -1,0 +1,41 @@
+# Linux desktop client (GTK4 + libadwaita). Own workspace and Cargo.lock: the root workspace
+# builds without GTK. Build: cargo build --release --locked (needs libgtk-4-dev, libadwaita-1-dev).
+[workspace]
+
+[package]
+name = "vaultage-gui"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "vaultage_gui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "vaultage-gui"
+path = "src/main.rs"
+
+[[bin]]
+name = "vaultage-gui-selftest"
+path = "src/bin/selftest.rs"
+
+[dependencies]
+vaultage-core = { path = "../crates/core" }
+gtk = { package = "gtk4", version = "0.11", features = ["v4_14"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
+zeroize = "1.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+qrcodegen = "1.8"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+panic = "abort"
+strip = true
+
+# Argon2, ChaCha, BLAKE3 fast even in debug builds.
+[profile.dev.package."*"]
+opt-level = 3
