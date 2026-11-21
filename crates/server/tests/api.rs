@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use vaultage_core::hexutil;
-use vaultage_core::proto::{sign_request, ENROLL_HEADER, MAX_CHUNK_BODY};
+use vaultage_core::proto::{sign_request, CLOCK_SKEW_ERROR, ENROLL_HEADER, MAX_CHUNK_BODY};
 use common::*;
 use ed25519_dalek::SigningKey;
 use serde_json::json;
@@ -82,17 +82,20 @@ fn signature_checks(k: Kind) {
     assert_eq!(c.log("").status, 200);
     let pq = c.vpath("/log");
     let other = SigningKey::from_bytes(&[7u8; 32]);
-    assert_eq!(c.signed_ts(&other, "GET", &pq, b"", now_ms()).status, 401, "wrong key");
-    assert_eq!(
-        c.signed_ts(&c.key, "GET", &pq, b"", now_ms() - 10 * 60 * 1000).status,
-        401,
-        "stale ts"
-    );
-    assert_eq!(
-        c.signed_ts(&c.key, "GET", &pq, b"", now_ms() + 10 * 60 * 1000).status,
-        401,
-        "future ts"
-    );
+    let r = c.signed_ts(&other, "GET", &pq, b"", now_ms());
+    assert_eq!(r.status, 401, "wrong key");
+    assert_eq!(r.json()["error"], "bad signature");
+    // A wrong clock is told apart from a wrong key, whoever signed.
+    for (ts, what) in [(now_ms() - 10 * 60 * 1000, "stale ts"), (now_ms() + 10 * 60 * 1000, "future ts")] {
+        for key in [&c.key, &other] {
+            let r = c.signed_ts(key, "GET", &pq, b"", ts);
+            assert_eq!(r.status, 401, "{what}");
+            let msg = r.json()["error"].as_str().unwrap_or_default().to_string();
+            assert!(msg.starts_with(CLOCK_SKEW_ERROR), "{what}: {msg}");
+        }
+    }
+    // Inside the window the timestamp is not the problem.
+    assert_eq!(c.signed_ts(&c.key, "GET", &pq, b"", now_ms() - 4 * 60 * 1000).status, 200, "4 min old");
     // Signed for one query, sent with another.
     let auth = sign_request(&c.key, "GET", &format!("{pq}?after=0"), now_ms(), b"");
     let r = send(

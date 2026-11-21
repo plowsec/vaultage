@@ -15,9 +15,9 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use vaultage_core::hexutil;
 use vaultage_core::proto::{
-    verify_request, CommitReq, CommitResp, ConflictResp, CreateVaultReq, ErrorResp, InviteClaimReq, InviteClaimResp,
-    InviteCreateReq, InvitesResp, LogResp, MissingReq, MissingResp, PruneReq, RekeyReq, WireRecord, ENROLL_HEADER,
-    MAX_CHUNK_BODY, MAX_JSON_BODY,
+    request_skewed, verify_request, CommitReq, CommitResp, ConflictResp, CreateVaultReq, ErrorResp, InviteClaimReq,
+    InviteClaimResp, InviteCreateReq, InvitesResp, LogResp, MissingReq, MissingResp, PruneReq, RekeyReq, WireRecord,
+    CLOCK_SKEW_ERROR, ENROLL_HEADER, MAX_CHUNK_BODY, MAX_JSON_BODY, MAX_SKEW_MS,
 };
 
 use crate::ratelimit::Limiter;
@@ -63,6 +63,10 @@ fn serr(e: SErr) -> Response {
         SErr::NoVault => err(StatusCode::NOT_FOUND, "no such vault"),
         SErr::Exists => err(StatusCode::CONFLICT, "vault exists"),
         SErr::BadSig => err(StatusCode::UNAUTHORIZED, "bad signature"),
+        SErr::ClockSkew => err(
+            StatusCode::UNAUTHORIZED,
+            &format!("{CLOCK_SKEW_ERROR}: the request's time is more than {} minutes from the server's", MAX_SKEW_MS / 60_000),
+        ),
         SErr::Conflict(current_rev) => (StatusCode::CONFLICT, Json(ConflictResp { current_rev })).into_response(),
         SErr::StaleHeader => err(StatusCode::CONFLICT, "stale header version"),
         SErr::Missing(ids) => (
@@ -173,6 +177,15 @@ impl Signed {
             .as_deref()
             .is_some_and(|a| verify_request(key, a, &self.method, &self.pq, body, store::now_ms()))
     }
+
+    /// What to answer a request that did not verify: a wrong clock gets its own text.
+    fn refusal(&self) -> SErr {
+        if self.authz.as_deref().is_some_and(|a| request_skewed(a, store::now_ms())) {
+            SErr::ClockSkew
+        } else {
+            SErr::BadSig
+        }
+    }
 }
 
 impl App {
@@ -192,7 +205,7 @@ impl App {
             }
         }
         Err(match self.authfail_rl.hit(vid) {
-            Ok(()) => serr(SErr::BadSig),
+            Ok(()) => serr(sig.refusal()),
             Err(ra) => too_many(ra),
         })
     }
@@ -214,7 +227,7 @@ impl App {
             }
         }
         Err(match self.authfail_rl.hit(vid) {
-            Ok(()) => serr(if found.is_some() { SErr::BadSig } else { SErr::NoInvite }),
+            Ok(()) => serr(if found.is_some() { sig.refusal() } else { SErr::NoInvite }),
             Err(ra) => too_many(ra),
         })
     }

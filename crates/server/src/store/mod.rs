@@ -23,6 +23,8 @@ pub enum SErr {
     NoVault,
     Exists,
     BadSig,
+    /// Request timestamp too far from the server's clock (401, own text).
+    ClockSkew,
     /// Commit base mismatch: current rev.
     Conflict(u64),
     StaleHeader,

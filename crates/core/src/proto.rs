@@ -22,6 +22,7 @@
 //!
 //! Signed requests carry `Authorization: Coffer ts=<unix_ms>,sig=<hex ed25519>` over
 //! `signing_message(method, path_and_query, ts, body)`, verified against the vault's `auth_pub`.
+//! `ts` more than `MAX_SKEW_MS` from the server's clock: 401 `clock skew: ...` (not `bad signature`).
 //!
 //! Prune: for each item, every record of `entry` with rev < `below` becomes a placeholder (blob
 //! dropped for good; seq/entry/rev stay, so the log remains gapless). `below` must be <= the
@@ -52,6 +53,8 @@ pub const MAX_CHUNK_BODY: usize = CHUNK_SIZE + 1024;
 pub const MAX_JSON_BODY: usize = 32 * 1024 * 1024;
 /// Allowed clock skew for signed requests.
 pub const MAX_SKEW_MS: i64 = 5 * 60 * 1000;
+/// Start of the 401 text for a request whose timestamp is outside `MAX_SKEW_MS`. Clients match it.
+pub const CLOCK_SKEW_ERROR: &str = "clock skew";
 pub const ENROLL_HEADER: &str = "X-Coffer-Enroll";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -224,6 +227,26 @@ pub fn sign_request(key: &SigningKey, method: &str, path_and_query: &str, ts_ms:
     format!("Coffer ts={},sig={}", ts_ms, hexutil::encode(&sig.to_bytes()))
 }
 
+/// `ts` and `sig` of an `Authorization` header value.
+fn parse_authorization(authorization: &str) -> (Option<i64>, Option<[u8; 64]>) {
+    let Some(rest) = authorization.strip_prefix("Coffer ") else { return (None, None) };
+    let (mut ts, mut sig) = (None, None);
+    for part in rest.split(',') {
+        match part.trim().split_once('=') {
+            Some(("ts", v)) => ts = v.parse::<i64>().ok(),
+            Some(("sig", v)) => sig = hexutil::decode_array::<64>(v),
+            _ => {}
+        }
+    }
+    (ts, sig)
+}
+
+/// True if the request's timestamp is outside `MAX_SKEW_MS` of `now_ms`: the sender's clock is
+/// wrong (or the request is an old replay). Such a request never verifies.
+pub fn request_skewed(authorization: &str, now_ms: i64) -> bool {
+    parse_authorization(authorization).0.is_some_and(|ts| now_ms.abs_diff(ts) > MAX_SKEW_MS as u64)
+}
+
 /// Verify an `Authorization` header value. `now_ms` bounds replay to `MAX_SKEW_MS`.
 pub fn verify_request(
     auth_pub: &[u8; 32],
@@ -233,17 +256,9 @@ pub fn verify_request(
     body: &[u8],
     now_ms: i64,
 ) -> bool {
-    let Some(rest) = authorization.strip_prefix("Coffer ") else { return false };
-    let (mut ts, mut sig) = (None, None);
-    for part in rest.split(',') {
-        match part.trim().split_once('=') {
-            Some(("ts", v)) => ts = v.parse::<i64>().ok(),
-            Some(("sig", v)) => sig = hexutil::decode_array::<64>(v),
-            _ => {}
-        }
-    }
+    let (ts, sig) = parse_authorization(authorization);
     let (Some(ts), Some(sig)) = (ts, sig) else { return false };
-    if (now_ms - ts).abs() > MAX_SKEW_MS {
+    if now_ms.abs_diff(ts) > MAX_SKEW_MS as u64 {
         return false;
     }
     let Ok(vk) = VerifyingKey::from_bytes(auth_pub) else { return false };

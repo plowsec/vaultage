@@ -91,6 +91,11 @@ pub fn check_url(url: &str) -> Result<String> {
 }
 
 fn call(agent: &ureq::Agent, method: &str, url: &str, headers: &[(&str, &str)], body: Option<&[u8]>) -> Result<(u16, Vec<u8>)> {
+    call_dated(agent, method, url, headers, body).map(|(s, b, _)| (s, b))
+}
+
+/// `call`, plus the server's clock from the reply's `Date` header (ms).
+fn call_dated(agent: &ureq::Agent, method: &str, url: &str, headers: &[(&str, &str)], body: Option<&[u8]>) -> Result<(u16, Vec<u8>, Option<i64>)> {
     let net = |e: ureq::Error| Error::Net(e.to_string());
     let mut resp = match (method, body) {
         ("GET", _) => {
@@ -109,8 +114,74 @@ fn call(agent: &ureq::Agent, method: &str, url: &str, headers: &[(&str, &str)], 
         }
     };
     let status = resp.status().as_u16();
+    let date = resp.headers().get("date").and_then(|v| v.to_str().ok()).and_then(parse_http_date);
     let data = resp.body_mut().with_config().limit(MAX_JSON_BODY as u64 * 2).read_to_vec().map_err(net)?;
+    Ok((status, data, date))
+}
+
+/// A signed request (`ts_ms` is the time it was signed with). A 401 caused by this device's
+/// clock comes back as `Error::Clock`, not as a status: the server says so, or (older servers
+/// answer "bad signature") its `Date` header is out of the window the server accepts.
+fn call_signed(agent: &ureq::Agent, method: &str, url: &str, headers: &[(&str, &str)], body: Option<&[u8]>, ts_ms: i64) -> Result<(u16, Vec<u8>)> {
+    let (status, data, date) = call_dated(agent, method, url, headers, body)?;
+    if status == 401 {
+        let said = serde_json::from_slice::<ErrorResp>(&data).is_ok_and(|e| e.error.starts_with(CLOCK_SKEW_ERROR));
+        if let Some(e) = clock_error(said, ts_ms, date) {
+            return Err(e);
+        }
+    }
     Ok((status, data))
+}
+
+/// The `Date` header has whole seconds and the reply took time: this close to the limit counts.
+const SKEW_SLACK_MS: i64 = 10_000;
+
+fn clock_error(server_said: bool, ts_ms: i64, server_ms: Option<i64>) -> Option<Error> {
+    let off = server_ms.map(|d| ts_ms.saturating_sub(d));
+    let known = off.filter(|o| o.saturating_abs() > MAX_SKEW_MS - SKEW_SLACK_MS);
+    if !server_said && known.is_none() {
+        return None;
+    }
+    let fix = "Set the date and time, then try again.";
+    Some(Error::Clock(match known {
+        Some(o) => format!("This device’s clock is about {} {} the server’s. {fix}", span(o.saturating_abs()), if o < 0 { "behind" } else { "ahead of" }),
+        None => format!("This device’s clock is more than {} minutes off the server’s. {fix}", MAX_SKEW_MS / 60_000),
+    }))
+}
+
+/// "12 minutes", "3 hours", "40 days".
+fn span(ms: i64) -> String {
+    let min = (ms + 30_000) / 60_000;
+    let (n, unit) = match min {
+        0..=119 => (min, "minute"),
+        120..=2879 => ((min + 30) / 60, "hour"),
+        _ => ((min + 720) / 1440, "day"),
+    };
+    format!("{n} {unit}{}", if n == 1 { "" } else { "s" })
+}
+
+/// `Sun, 06 Nov 1994 08:49:37 GMT` (the only form servers send) as Unix ms.
+fn parse_http_date(s: &str) -> Option<i64> {
+    let mut it = s.split_ascii_whitespace();
+    let (_dow, day, mon, year, time, zone) = (it.next()?, it.next()?, it.next()?, it.next()?, it.next()?, it.next()?);
+    if zone != "GMT" || it.next().is_some() {
+        return None;
+    }
+    let day: i64 = day.parse().ok()?;
+    let year: i64 = year.parse().ok()?;
+    let mon = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].iter().position(|m| *m == mon)? as i64 + 1;
+    let mut hms = time.split(':').map(|p| p.parse::<i64>().ok());
+    let (h, m, sec) = (hms.next()??, hms.next()??, hms.next()??);
+    if hms.next().is_some() || !(1970..=9999).contains(&year) || !(1..=31).contains(&day) || h > 23 || m > 59 || sec > 60 || h < 0 || m < 0 || sec < 0 {
+        return None;
+    }
+    // Days since 1970-01-01 (proleptic Gregorian), months counted from March.
+    let y = if mon <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let doy = (153 * ((mon + 9) % 12) + 2) / 5 + day - 1;
+    let days = era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468;
+    Some((days * 86_400 + h * 3600 + m * 60 + sec) * 1000)
 }
 
 fn server_error(status: u16, body: &[u8]) -> Error {
@@ -143,9 +214,10 @@ impl HttpRemote {
 
     fn signed(&self, method: &str, tail: &str, body: Option<&[u8]>, json: bool) -> Result<(u16, Vec<u8>)> {
         let path = format!("/v1/vaults/{}/{}", self.vault, tail);
-        let auth = sign_request(&self.keys.auth, method, &path, now_ms(), body.unwrap_or(&[]));
+        let ts = now_ms();
+        let auth = sign_request(&self.keys.auth, method, &path, ts, body.unwrap_or(&[]));
         let ct = if json { "application/json" } else { "application/octet-stream" };
-        call(&self.agent, method, &format!("{}{}", self.base, path), &[("Authorization", &auth), ("Content-Type", ct)], body)
+        call_signed(&self.agent, method, &format!("{}{}", self.base, path), &[("Authorization", &auth), ("Content-Type", ct)], body, ts)
     }
 
     /// Switch the vault to a new signing key and header (key rotation). Signed with the old key.
@@ -235,8 +307,9 @@ pub fn claim_invite(url: &str, vault_id_hex: &str, keys: &crate::invite::InviteK
     let body = serde_json::to_vec(&InviteClaimReq { nonce: nonce.to_string() })?;
     let mut attempt = 0;
     loop {
-        let auth = sign_request(&keys.claim, "POST", &path, now_ms(), &body);
-        let res = call(&agent, "POST", &format!("{base}{path}"), &[("Authorization", &auth), ("Content-Type", "application/json")], Some(&body));
+        let ts = now_ms();
+        let auth = sign_request(&keys.claim, "POST", &path, ts, &body);
+        let res = call_signed(&agent, "POST", &format!("{base}{path}"), &[("Authorization", &auth), ("Content-Type", "application/json")], Some(&body), ts);
         match res {
             Ok((200, b)) => {
                 let r: InviteClaimResp = serde_json::from_slice(&b)?;
@@ -335,6 +408,77 @@ mod tests {
         assert!(check_url("https://user@host").is_err());
         assert!(check_url("https://host/path").is_err());
         assert!(check_url("ftp://host").is_err());
+    }
+
+    #[test]
+    fn http_dates() {
+        assert_eq!(parse_http_date("Thu, 01 Jan 1970 00:00:00 GMT"), Some(0));
+        assert_eq!(parse_http_date("Sun, 06 Nov 1994 08:49:37 GMT"), Some(784_111_777_000));
+        assert_eq!(parse_http_date("Tue, 29 Feb 2000 23:59:59 GMT"), Some(951_868_799_000));
+        assert_eq!(parse_http_date("Sat, 21 Nov 2026 17:00:00 GMT"), Some(1_795_280_400_000));
+        for bad in ["", "Sun, 06 Nov 1994 08:49:37", "Sun, 06 Nov 1994 08:49:37 PST", "Sunday, 06-Nov-94 08:49:37 GMT", "Sun, 06 Foo 1994 08:49:37 GMT", "Sun, 06 Nov 1994 24:00:00 GMT", "Sun, 06 Nov 1994 08:49 GMT"] {
+            assert_eq!(parse_http_date(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn clock_errors() {
+        let now = 1_795_280_400_000i64;
+        let text = |said, ts, date| clock_error(said, ts, date).map(|e| e.to_string());
+        // A 401 with clocks in step is a real signature problem.
+        assert_eq!(text(false, now, Some(now)), None);
+        assert_eq!(text(false, now, Some(now + 4 * 60_000)), None);
+        assert_eq!(text(false, now, None), None);
+        // Older server ("bad signature"): the Date header tells.
+        assert_eq!(text(false, now - 12 * 60_000, Some(now)).unwrap(), "This device’s clock is about 12 minutes behind the server’s. Set the date and time, then try again.");
+        assert_eq!(text(false, now + 3 * 3_600_000, Some(now)).unwrap(), "This device’s clock is about 3 hours ahead of the server’s. Set the date and time, then try again.");
+        assert!(text(false, 0, Some(now)).unwrap().contains(" days behind "));
+        // The server said so, and no usable Date header.
+        assert_eq!(text(true, now, None).unwrap(), "This device’s clock is more than 5 minutes off the server’s. Set the date and time, then try again.");
+        assert_eq!(text(true, now, Some(now)).unwrap(), "This device’s clock is more than 5 minutes off the server’s. Set the date and time, then try again.");
+        assert_eq!(clock_error(true, now, None).unwrap().code(), "clock");
+        assert_eq!((span(60_000), span(119 * 60_000), span(36 * 3_600_000), span(72 * 3_600_000)), ("1 minute".into(), "119 minutes".into(), "36 hours".into(), "3 days".into()));
+    }
+
+    /// One-shot HTTP server on loopback answering every request with `reply`.
+    fn fake_server(reply: &'static str) -> String {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://127.0.0.1:{}", l.local_addr().unwrap().port());
+        std::thread::spawn(move || {
+            for mut c in l.incoming().flatten() {
+                let mut buf = [0u8; 4096];
+                let mut got = Vec::new();
+                while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match c.read(&mut buf) {
+                        Ok(n) if n > 0 => got.extend_from_slice(&buf[..n]),
+                        _ => break,
+                    }
+                }
+                let _ = c.write_all(reply.as_bytes());
+            }
+        });
+        url
+    }
+
+    #[test]
+    fn refused_for_the_clock() {
+        let remote = |reply| {
+            let keys = Arc::new(Keys::new(vec![crate::crypto::Key::from_bytes([3u8; 32])]));
+            HttpRemote::new(&fake_server(reply), &"ab".repeat(16), keys).unwrap()
+        };
+        // Server that only says "bad signature", its clock decades from ours.
+        let old = "HTTP/1.1 401 Unauthorized\r\nDate: Sun, 06 Nov 1994 08:49:37 GMT\r\nContent-Type: application/json\r\nContent-Length: 25\r\nConnection: close\r\n\r\n{\"error\":\"bad signature\"}";
+        match remote(old).usage() {
+            Err(Error::Clock(m)) => assert!(m.contains(" days ahead of the server’s"), "{m}"),
+            r => panic!("expected a clock error, got {:?}", r.map(|_| ())),
+        }
+        // Server that names the cause, no Date header.
+        let new = "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: 46\r\nConnection: close\r\n\r\n{\"error\":\"clock skew: the request's time ...\"}";
+        assert!(matches!(remote(new).usage(), Err(Error::Clock(_))));
+        // A wrong key with no clock evidence stays a 401.
+        let key = "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: 25\r\nConnection: close\r\n\r\n{\"error\":\"bad signature\"}";
+        assert!(matches!(remote(key).usage(), Err(Error::Server(401, _))));
     }
 
     #[test]

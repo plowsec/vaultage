@@ -16,6 +16,8 @@ pub enum Error {
     Net(String),
     /// Server refused the request.
     Server(u16, String),
+    /// Server refused the request because this device's clock is wrong. The text is for the user.
+    Clock(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -33,6 +35,7 @@ impl Error {
             Error::Locked => "locked",
             Error::Net(_) => "network",
             Error::Server(..) => "server",
+            Error::Clock(_) => "clock",
         }
     }
 }
@@ -50,6 +53,7 @@ impl fmt::Display for Error {
             Error::Locked => write!(f, "vault is locked"),
             Error::Net(m) => write!(f, "network: {m}"),
             Error::Server(c, m) => write!(f, "server ({c}): {m}"),
+            Error::Clock(m) => write!(f, "{m}"),
         }
     }
 }
