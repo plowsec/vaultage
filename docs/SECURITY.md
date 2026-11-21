@@ -151,7 +151,7 @@ Limits:
 |---|---|
 | Root, kernel, `CAP_SYS_PTRACE` | read any memory. Not defended |
 | `PR_SET_DUMPABLE` | resets on `execve` only; a same-uid process can still use the desktop as the user (open the vault folder, read your exports, keylog on X11) |
-| Portals | xdg-desktop-portal refuses non-dumpable processes. Effects: dark/light read from GSettings instead; "Open Folder" goes through `AppInfo`, not the OpenURI portal; Flatpak would need a different approach |
+| Portals | xdg-desktop-portal refuses non-dumpable processes. Effects: dark/light read from GSettings instead; "Open Folder" goes through `AppInfo`, not the OpenURI portal; file choosers are GTK's own (`GDK_DEBUG=no-portals` set at startup: GTK 4.18+ would otherwise use the portal and no chooser would open); Flatpak would need a different approach |
 | Swap / hibernate | only key material is `mlock`ed (limit 8 MiB by default: `ulimit -l`). Decrypted file contents in previews can reach swap and a hibernation image. Use encrypted swap or none |
 | X11 | any X client can read the window, the clipboard and keystrokes. Wayland isolates clients; the popover shows which one runs |
 | Screenshots | GNOME's screenshot tool and screen casts capture the window (compositor-side, no per-window opt-out on Linux) |

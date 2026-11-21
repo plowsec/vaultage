@@ -41,7 +41,7 @@ Path collisions resolve the same way on every device (committed beats uncommitte
 | Damage elsewhere in a log | hard error; nothing truncated |
 | Local chunk corrupt | detected by hash; re-fetched from server |
 | Two saves offline before sync | only the last one is pushed (like saving twice) |
-| Clock skew > 5 min | server rejects signatures (401); fix the clock |
+| Clock skew > 5 min | server rejects the request (401 `clock skew: ...`); apps say the device clock is off and by how much (from the reply, or the `Date` header of an older server); fix the clock |
 
 ## Deletes and history
 
