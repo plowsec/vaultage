@@ -335,6 +335,9 @@ mod tests {
         assert_eq!(e("network", "network: connection refused").text(), "Can’t reach the sync server. Connection refused.");
         assert_eq!(e("server", "server (507): quota").text(), QUOTA_FULL);
         assert_eq!(e("server", "server (403): bad token").text(), "The sync server refused the request: Bad token.");
+        let clock = "This device’s clock is about 12 minutes behind the server’s. Set the date and time, then try again.";
+        assert_eq!(e("clock", clock).text(), clock);
+        assert_eq!(readable_sync(clock), clock);
         assert_eq!(e("not_found", "not found: a.txt").text(), "Couldn’t find “a.txt”.");
         assert_eq!(e("io", "No such file or directory (os error 2)").text(), "No such file or directory.");
         assert_eq!(e("server", "server (410): invite expired").invite_gone(), Some("expired"));

@@ -1133,7 +1133,15 @@ impl Browser {
             .build();
         let me = self.clone();
         let done = move |r: Result<gio::ListModel, glib::Error>| {
-            let Ok(list) = r else { return };
+            let list = match r {
+                Ok(l) => l,
+                Err(e) => {
+                    if let Some(app) = me.app() {
+                        super::util::dialog_failed(&app.window, &e);
+                    }
+                    return;
+                }
+            };
             let paths: Vec<PathBuf> = (0..list.n_items()).filter_map(|i| list.item(i).and_downcast::<gio::File>()).filter_map(|f| f.path()).collect();
             if !paths.is_empty() {
                 me.import(paths, move_in, false);
@@ -1301,9 +1309,14 @@ impl Browser {
             let d = gtk::FileDialog::builder().title(if remove { "Move Out To" } else { "Export To" }).accept_label(if remove { "Move Out" } else { "Export" }).modal(true).build();
             let (me2, paths, what) = (me.clone(), paths.clone(), what.clone());
             d.select_folder(Some(&app.window), None::<&gio::Cancellable>, move |r| {
-                let Ok(dir) = r else { return };
-                let Some(dest) = dir.path() else { return };
                 let Some(app) = me2.app() else { return };
+                let dir = match r {
+                    Ok(d) => d,
+                    Err(e) => return super::util::dialog_failed(&app.window, &e),
+                };
+                let Some(dest) = dir.path() else {
+                    return super::util::alert(&app.window, if remove { "Couldn’t move out" } else { "Couldn’t export" }, "That location isn’t a folder on this computer.");
+                };
                 app.busy(true);
                 let (b, id, me3, dname, dest2) = (app.backend.clone(), me2.id.clone(), me2.clone(), dir.basename().map(|p| p.display().to_string()).unwrap_or_default(), dest.clone());
                 let what = what.clone();

@@ -22,6 +22,16 @@ pub fn alert(parent: &impl IsA<gtk::Widget>, title: &str, body: &str) {
     d.present(Some(parent));
 }
 
+/// A file dialog ended without a choice. Closing it is not an error; anything else is shown
+/// (a chooser that never opened must not look like a button that does nothing).
+pub fn dialog_failed(parent: &impl IsA<gtk::Widget>, e: &glib::Error) {
+    if e.matches(gtk::DialogError::Dismissed) || e.matches(gtk::DialogError::Cancelled) || e.matches(gio::IOErrorEnum::Cancelled) {
+        return;
+    }
+    eprintln!("vaultage: file dialog: {e}");
+    alert(parent, "Couldn’t open the file chooser", e.message());
+}
+
 pub fn error(parent: &impl IsA<gtk::Widget>, title: &str, e: &UiError) {
     alert(parent, title, &e.text());
 }

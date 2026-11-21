@@ -1,6 +1,19 @@
-//! When to drop keys: idle timeout, screen lock / suspend, quit.
+//! When to drop keys: idle timeout, screen lock / suspend, quit. Also: no desktop portals.
 
 use std::time::{Duration, Instant};
+
+/// `GDK_DEBUG` with portals off, other flags kept. GTK 4.18+ sends file dialogs through
+/// xdg-desktop-portal whenever one runs; the portal refuses a non-dumpable process ("Unable to
+/// open /proc/PID/root"), so the chooser never opens. With `no-portals` GTK shows its own.
+pub fn gdk_debug_without_portals(current: Option<&str>) -> String {
+    let mut flags: Vec<&str> = current
+        .unwrap_or("")
+        .split([':', ';', ',', ' ', '\t'])
+        .filter(|f| !f.is_empty() && !f.eq_ignore_ascii_case("portals") && !f.eq_ignore_ascii_case("no-portals"))
+        .collect();
+    flags.push("no-portals");
+    flags.join(",")
+}
 
 /// Why all vaults are being locked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +67,15 @@ impl LockPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn portals_off() {
+        assert_eq!(gdk_debug_without_portals(None), "no-portals");
+        assert_eq!(gdk_debug_without_portals(Some("")), "no-portals");
+        assert_eq!(gdk_debug_without_portals(Some("portals")), "no-portals");
+        assert_eq!(gdk_debug_without_portals(Some("no-portals")), "no-portals");
+        assert_eq!(gdk_debug_without_portals(Some("gl-disable:portals; frames")), "gl-disable,frames,no-portals");
+    }
 
     #[test]
     fn idle() {

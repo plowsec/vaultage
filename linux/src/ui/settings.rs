@@ -501,7 +501,10 @@ fn pin_from_file(app: &Rc<App>, url: &str, id: &str) {
     let d = gtk::FileDialog::builder().title("Pin Server Certificate").accept_label("Pin").filters(&filters).modal(true).build();
     let (a, url, id) = (app.clone(), url.to_string(), id.to_string());
     d.open(Some(&app.window), None::<&gio::Cancellable>, move |r| {
-        let Ok(file) = r else { return };
+        let file = match r {
+            Ok(f) => f,
+            Err(e) => return super::util::dialog_failed(&a.window, &e),
+        };
         let Some(path) = file.path() else { return };
         let (b, a2, u, id2) = (a.backend.clone(), a.clone(), url.clone(), id.clone());
         bg(
